@@ -1,0 +1,17 @@
+id: jira
+base_url: http://project.dhb168.com
+login_url: /secure/ViewProfile.jspa
+cookie:
+  magic: "JIRAENC\x01"
+  env: JIRA_COOKIE
+chrome_path_env: JIRA_CHROME_PATH
+no_fail_env: JIRA_NO_FAIL
+auth:
+  method: GET
+  path: /rest/api/2/myself
+  ok_status: 200
+  username_json_paths:
+    - name
+    - displayName
+  username_forbidden:
+    - anonymous

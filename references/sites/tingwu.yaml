@@ -1,0 +1,18 @@
+id: tingwu
+base_url: https://tingwu.aliyun.com
+login_url: /home
+cookie:
+  magic: "TINGWUENC\x01"
+  env: TINGWU_COOKIE
+chrome_path_env: TINGWU_CHROME_PATH
+no_fail_env: TINGWU_NO_FAIL
+auth:
+  method: GET
+  path: /api/account/v2/user/info?c=web
+  ok_status: 200
+  username_json_paths:
+    - data.nickName
+    - data.userName
+  identity_json_paths:
+    - data.userId
+  user_id_json_path: data.userId

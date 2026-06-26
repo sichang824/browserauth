@@ -1,0 +1,13 @@
+{
+  "directories": [
+    "/Users/ann/.cursor/skills/browserauth"
+  ],
+  "include": [
+    "README.md",
+    "SKILL.md"
+  ],
+  "exclude": [
+    ".DS_Store",
+    "**/.DS_Store"
+  ]
+}

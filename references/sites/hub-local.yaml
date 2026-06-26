@@ -1,0 +1,19 @@
+id: hub-local
+base_url: http://localhost:5173
+login_url: /console/login
+cookie:
+  magic: "HUBLOCALENC\x01"
+  env: HUB_LOCAL_COOKIE
+chrome_path_env: HUB_LOCAL_CHROME_PATH
+no_fail_env: HUB_LOCAL_NO_FAIL
+auth:
+  method: GET
+  path: /iam-api/v1/me
+  ok_status: 200
+  token:
+    cookie: app_platform_token
+  username_json_paths:
+    - data.name
+    - data.account_name
+  username_forbidden:
+    - anonymous
