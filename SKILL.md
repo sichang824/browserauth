@@ -82,8 +82,19 @@ Cookie file: `~/.browserauth/cookies/myapp`
 
 | Site | Business | Auth |
 |------|----------|------|
+| authz | AuthZ Admin + API (`authz.zsclab.com` / `api.authz.zsclab.com`) | `browserauth authz …` → cookie `access_token` as Bearer; see [authz skill](../../.cursor/skills/authz/SKILL.md) |
 | tingwu | `scripts/transcribe.sh` + `oapi` | `browserauth tingwu ...` |
 | jira | `oapi call` + [jira/specs/jira.openapi.yaml](../jira/specs/jira.openapi.yaml) | `browserauth jira ...` |
+| chatgpt | [chatgpt skill](../chatgpt/SKILL.md) headed Chrome send | `browserauth chatgpt ...` |
+
+Site YAML templates: `references/sites/` (includes `authz.yaml`, `chatgpt.yaml`).
+
+### AuthZ notes
+
+- Login UI and cookies: `https://authz.zsclab.com`
+- REST / OIDC issuer: `https://api.authz.zsclab.com`
+- `auth.token.cookie: access_token` → `Authorization: Bearer …`
+- Cookie capture uses both `base_url` and absolute `login_url` when they differ
 
 ## Env
 

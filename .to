@@ -1,13 +1,16 @@
 {
   "directories": [
-    "/Users/ann/.cursor/skills/browserauth"
+    "/Users/ann/.agents/skills/browserauth",
+    "/Users/ann/.cursor/skills/browserauth",
+    "/Users/ann/.workbuddy/skills/browserauth"
   ],
   "include": [
-    "README.md",
-    "SKILL.md"
+    "Makefile",
+    "SKILL.md",
+    "references/**"
   ],
   "exclude": [
-    ".DS_Store",
-    "**/.DS_Store"
+    "**/.DS_Store",
+    "browserauth"
   ]
 }

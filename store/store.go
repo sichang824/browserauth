@@ -125,20 +125,26 @@ func ResolveCookie(names AppNames) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("missing cookie: set %s or run browserauth %s login (expected file %s)", names.CookieEnv, names.SiteID, path)
 	}
-	data = []byte(strings.TrimRight(string(data), "\n\r"))
 
 	if cookie.IsEncrypted(data, names.Magic) {
 		passphrase, err := ResolvePassphrase(names)
 		if err != nil {
 			return "", err
 		}
+		// Try raw bytes first: ciphertext may legitimately end with 0x0a/0x0d.
+		// Then peel optional trailing newlines that editors/shells may append.
 		plain, err := cookie.Decrypt(data, names.Magic, passphrase)
+		for err != nil && len(data) > 0 && (data[len(data)-1] == '\n' || data[len(data)-1] == '\r') {
+			data = data[:len(data)-1]
+			plain, err = cookie.Decrypt(data, names.Magic, passphrase)
+		}
 		if err != nil {
 			return "", fmt.Errorf("decrypt cookie file: %w", err)
 		}
 		return plain, nil
 	}
-	return string(data), nil
+	// Plaintext cookies may have a trailing newline from shell redirects.
+	return strings.TrimRight(string(data), "\n\r"), nil
 }
 
 // WriteEncryptedCookie encrypts and writes cookie to the configured file.

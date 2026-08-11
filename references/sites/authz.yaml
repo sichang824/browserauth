@@ -1,0 +1,25 @@
+# AuthZ Admin SPA + API (zsclab production).
+# Login UI and session cookies live on WEB_HOST; REST is on API issuer.
+id: authz
+base_url: https://api.authz.zsclab.com
+login_url: https://authz.zsclab.com/login
+cookie:
+  magic: "AUTHZENC\x01"
+  env: AUTHZ_COOKIE
+chrome_path_env: AUTHZ_CHROME_PATH
+no_fail_env: AUTHZ_NO_FAIL
+auth:
+  # SPA stores JWT in cookie access_token; API expects Authorization: Bearer …
+  method: POST
+  path: /users/me
+  ok_status: 200
+  token:
+    cookie: access_token
+    header: Authorization
+    prefix: "Bearer "
+  username_json_paths:
+    - email
+    - username
+    - nickname
+  username_forbidden:
+    - anonymous

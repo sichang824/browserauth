@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"skills-browserauth/cookie"
 )
 
 func TestDefaultDataDir(t *testing.T) {
@@ -112,5 +114,89 @@ func TestResolvePassphraseMissing(t *testing.T) {
 	t.Setenv("JIRA_COOKIE_KEY", "")
 	if _, err := ResolvePassphrase(AppNames{CookieKeyEnv: "JIRA_COOKIE_KEY"}); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestResolveCookieKeepsTrailingNewlineInCiphertext(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(dataDirEnv, dir)
+	t.Setenv(defaultKeyEnv, "test-passphrase")
+	t.Setenv("CHATGPT_COOKIE", "")
+
+	names := AppNames{
+		SiteID:        "chatgpt",
+		Magic:         "CHATGPTENC\x01",
+		CookieEnv:     "CHATGPT_COOKIE",
+		CookieFileEnv: "CHATGPT_COOKIE_FILE",
+	}
+
+	plain := "session-token=abc; __Secure-next-auth.session-token=xyz"
+	var blob []byte
+	var err error
+	// Re-encrypt until natural ciphertext ends with 0x0a (exposes TrimRight bug).
+	for i := 0; i < 10000; i++ {
+		blob, err = cookie.Encrypt(plain, names.Magic, "test-passphrase")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blob[len(blob)-1] == '\n' {
+			break
+		}
+	}
+	if blob[len(blob)-1] != '\n' {
+		t.Fatal("could not produce ciphertext ending with 0x0a")
+	}
+
+	path := CookieFilePath(names)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveCookie(names)
+	if err != nil {
+		t.Fatalf("ResolveCookie: %v", err)
+	}
+	want, err := cookie.Decrypt(blob, names.Magic, "test-passphrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestResolveCookieAllowsExtraTrailingNewlineAfterBlob(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(dataDirEnv, dir)
+	t.Setenv(defaultKeyEnv, "test-passphrase")
+	t.Setenv("CHATGPT_COOKIE", "")
+
+	names := AppNames{
+		SiteID:    "chatgpt",
+		Magic:     "CHATGPTENC\x01",
+		CookieEnv: "CHATGPT_COOKIE",
+	}
+	plain := "session=ok"
+	blob, err := cookie.Encrypt(plain, names.Magic, "test-passphrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := CookieFilePath(names)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(blob, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveCookie(names)
+	if err != nil {
+		t.Fatalf("ResolveCookie: %v", err)
+	}
+	if got != plain {
+		t.Fatalf("got %q want %q", got, plain)
 	}
 }

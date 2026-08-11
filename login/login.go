@@ -136,8 +136,13 @@ func watchCapture(ctx context.Context, cfg Config, passphrase, profileDir string
 func tryPersist(ctx context.Context, cfg Config, passphrase, profileDir string) (Result, bool, error) {
 	var cookies []*network.Cookie
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		urls := []string{cfg.BaseURL}
+		// Web login host may differ from API base (e.g. authz.zsclab.com vs api.authz.zsclab.com).
+		if cfg.LoginURL != "" && !strings.HasPrefix(cfg.LoginURL, cfg.BaseURL) {
+			urls = append(urls, cfg.LoginURL)
+		}
 		var getErr error
-		cookies, getErr = network.GetCookies().WithURLs([]string{cfg.BaseURL}).Do(ctx)
+		cookies, getErr = network.GetCookies().WithURLs(urls).Do(ctx)
 		return getErr
 	}))
 	if err != nil {
