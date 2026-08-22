@@ -6,10 +6,15 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"skills-browserauth/store"
 )
+
+// requestTimeout bounds whole-request time. Some sites silently hold connections
+// open for non-browser clients; without a timeout the CLI hangs forever.
+const requestTimeout = 60 * time.Second
 
 // AuthHeaderBuilder derives extra headers (e.g. Bearer token) from a cookie header.
 type AuthHeaderBuilder func(cookieHeader string) map[string]string
@@ -34,7 +39,7 @@ type NewOptions struct {
 // NewDirect creates a Client with explicit base URL, cookie, and HTTP client.
 func NewDirect(baseURL, cookie string, hc *http.Client) *Client {
 	if hc == nil {
-		hc = &http.Client{}
+		hc = &http.Client{Timeout: requestTimeout}
 	}
 	return &Client{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
@@ -58,7 +63,7 @@ func New(opts NewOptions) (*Client, error) {
 		Cookie:      cookieHeader,
 		AuthHeaders: opts.AuthHeaders,
 		NoFail:      noFail,
-		httpClient:  &http.Client{},
+		httpClient:  &http.Client{Timeout: requestTimeout},
 	}, nil
 }
 

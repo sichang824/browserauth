@@ -1,0 +1,30 @@
+# Dify console (self-hosted yai.dhb168.com). Console API lives under
+# /console/api. Auth = session cookies; every call needs BOTH
+# Authorization: Bearer <access_token> and x-csrf-token: <csrf_token>
+# (this instance enforces CSRF even on GET), hence the two-entry tokens list.
+# Site id is dify-console (not dify): rsung's .env already exports
+# DIFY_BASE_URL/DIFY_COOKIE, which would override a "dify" site's config.
+id: dify-console
+base_url: https://yai.dhb168.com/console/api
+login_url: https://yai.dhb168.com/signin
+cookie:
+  magic: "DIFYENC\x01"
+  # NB: not DIFY_COOKIE — that name is taken by rsung's .env (chat/web session)
+  env: DIFY_CONSOLE_COOKIE
+chrome_path_env: DIFY_CHROME_PATH
+no_fail_env: DIFY_NO_FAIL
+auth:
+  method: GET
+  path: /workspaces
+  ok_status: 200
+  tokens:
+    - cookie: access_token
+      header: Authorization
+      prefix: "Bearer "
+    - cookie: csrf_token
+      header: x-csrf-token
+      prefix: ""
+  username_json_paths:
+    - workspaces.0.name
+  identity_json_paths:
+    - workspaces.0.id

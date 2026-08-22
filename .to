@@ -1,9 +1,5 @@
 {
-  "directories": [
-    "/Users/ann/.agents/skills/browserauth",
-    "/Users/ann/.cursor/skills/browserauth",
-    "/Users/ann/.workbuddy/skills/browserauth"
-  ],
+  "directories": [],
   "include": [
     "Makefile",
     "SKILL.md",

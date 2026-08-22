@@ -11,6 +11,7 @@ Usage:
   browserauth sites list|path|show|init|add|remove
   browserauth <site> login [--isolated-profile]
   browserauth <site> browser [--isolated-profile]
+  browserauth <site> record [--isolated-profile] [url]   Record traffic to HAR
   browserauth <site> auth
   browserauth <site> auth set [COOKIE]
   browserauth <site> request <METHOD> <PATH> [BODY]
@@ -18,7 +19,7 @@ Usage:
   browserauth help
 
 Sites are YAML files in ~/.browserauth/sites/<id>.yaml.
-Manage with: browserauth sites init|add --from-file|remove|show
+Manage with: browserauth sites init|new|add --from-file|remove|show
 Override dir: BROWSERAUTH_SITES_DIR (or BROWSERAUTH_DATA_DIR)
 
 Global env:
@@ -30,6 +31,7 @@ Global env:
 Default paths (under ~/.browserauth):
   cookies/<site>           Encrypted cookie per site
   profile/                 Shared Chrome profile (all sites)
+  recordings/<site>-<ts>.har  Recorded traffic (contains Cookie headers!)
 
 Isolated profile (optional):
   --isolated-profile       Per-site profile at profiles/<site>
@@ -48,6 +50,7 @@ Examples:
   browserauth tingwu auth
   browserauth jira request GET /rest/api/2/myself
   browserauth tingwu request POST '/api/trans/request?getTransStatus&c=web' '{"action":"getTransStatus"}'
+  browserauth tingwu record
 `
 
 // Run is the main entry point for the browserauth CLI.

@@ -31,6 +31,15 @@ func TestCookieFilePathUsesHomeHiddenDir(t *testing.T) {
 	}
 }
 
+func TestRecordingsDir(t *testing.T) {
+	t.Setenv(dataDirEnv, t.TempDir())
+	got := RecordingsDir()
+	want := filepath.Join(DefaultDataDir(), "recordings")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestGlobalProfileDirDefault(t *testing.T) {
 	t.Setenv(dataDirEnv, t.TempDir())
 	t.Setenv(globalProfileDirEnv, "")

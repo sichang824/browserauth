@@ -15,24 +15,38 @@ func (a AuthConfig) AuthHeaders(cookieHeader string) map[string]string {
 }
 
 func (a AuthConfig) authHeaders(cookieHeader string) map[string]string {
-	if a.Token == nil || a.Token.Cookie == "" {
-		return nil
+	tokens := a.Tokens
+	if a.Token != nil {
+		tokens = append([]TokenConfig{*a.Token}, tokens...)
 	}
-	value, ok := cookieValue(cookieHeader, a.Token.Cookie)
-	if !ok || value == "" {
+	if len(tokens) == 0 {
 		return nil
 	}
 
-	header := a.Token.Header
-	if header == "" {
-		header = "Authorization"
-	}
-	prefix := a.Token.Prefix
-	if prefix == "" && header == "Authorization" {
-		prefix = "Bearer "
-	}
+	headers := map[string]string{}
+	for _, token := range tokens {
+		if token.Cookie == "" {
+			continue
+		}
+		value, ok := cookieValue(cookieHeader, token.Cookie)
+		if !ok || value == "" {
+			continue
+		}
 
-	return map[string]string{header: prefix + value}
+		header := token.Header
+		if header == "" {
+			header = "Authorization"
+		}
+		prefix := token.Prefix
+		if prefix == "" && header == "Authorization" {
+			prefix = "Bearer "
+		}
+		headers[header] = prefix + value
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	return headers
 }
 
 func cookieValue(cookieHeader, name string) (string, bool) {

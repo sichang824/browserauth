@@ -88,9 +88,97 @@ func parseConfig(data []byte) (Config, error) {
 	return cfg, nil
 }
 
-// MarshalYAML serializes a site config.
+// MarshalYAML serializes a site config, emitting only non-empty fields in the
+// conventional order (matches the hand-written reference YAMLs).
 func MarshalYAML(cfg Config) ([]byte, error) {
-	return yaml.Marshal(cfg)
+	out := yamlConfig{
+		ID:            cfg.ID,
+		BaseURL:       cfg.BaseURL,
+		LoginURL:      cfg.LoginURL,
+		ChromePathEnv: cfg.ChromePathEnv,
+		NoFailEnv:     cfg.NoFailEnv,
+	}
+	if out.LoginURL == "/" { // parseConfig default; keep files clean
+		out.LoginURL = ""
+	}
+	cookie := yamlCookie{
+		Magic:   cfg.Cookie.Magic,
+		File:    cfg.Cookie.File,
+		KeyEnv:  cfg.Cookie.KeyEnv,
+		Env:     cfg.Cookie.Env,
+		FileEnv: cfg.Cookie.FileEnv,
+	}
+	if cookie != (yamlCookie{}) {
+		out.Cookie = &cookie
+	}
+	profile := yamlProfile{Subdir: cfg.Profile.Subdir, DirEnv: cfg.Profile.DirEnv}
+	if profile != (yamlProfile{}) {
+		out.Profile = &profile
+	}
+	auth := yamlAuth{
+		Method:            cfg.Auth.Method,
+		Path:              cfg.Auth.Path,
+		OKStatus:          cfg.Auth.OKStatus,
+		UsernameJSONPaths: cfg.Auth.UsernameJSONPaths,
+		IdentityJSONPaths: cfg.Auth.IdentityJSONPaths,
+		UserIDJSONPath:    cfg.Auth.UserIDJSONPath,
+		UsernameForbidden: cfg.Auth.UsernameForbidden,
+	}
+	if cfg.Auth.Token != nil {
+		auth.Token = &yamlToken{Cookie: cfg.Auth.Token.Cookie, Header: cfg.Auth.Token.Header, Prefix: cfg.Auth.Token.Prefix}
+	}
+	for _, tk := range cfg.Auth.Tokens {
+		auth.Tokens = append(auth.Tokens, yamlToken{Cookie: tk.Cookie, Header: tk.Header, Prefix: tk.Prefix})
+	}
+	if auth.Method != "" || auth.Path != "" || auth.OKStatus != 0 || auth.Token != nil ||
+		len(auth.Tokens) > 0 || len(auth.UsernameJSONPaths) > 0 || len(auth.IdentityJSONPaths) > 0 ||
+		auth.UserIDJSONPath != "" || len(auth.UsernameForbidden) > 0 {
+		out.Auth = &auth
+	}
+	return yaml.Marshal(out)
+}
+
+// yamlConfig mirrors Config with omitempty/pointer fields for clean output.
+type yamlConfig struct {
+	ID            string       `yaml:"id"`
+	BaseURL       string       `yaml:"base_url"`
+	LoginURL      string       `yaml:"login_url,omitempty"`
+	Cookie        *yamlCookie  `yaml:"cookie,omitempty"`
+	Profile       *yamlProfile `yaml:"profile,omitempty"`
+	ChromePathEnv string       `yaml:"chrome_path_env,omitempty"`
+	Auth          *yamlAuth    `yaml:"auth,omitempty"`
+	NoFailEnv     string       `yaml:"no_fail_env,omitempty"`
+}
+
+type yamlCookie struct {
+	Magic   string `yaml:"magic,omitempty"`
+	File    string `yaml:"file,omitempty"`
+	KeyEnv  string `yaml:"key_env,omitempty"`
+	Env     string `yaml:"env,omitempty"`
+	FileEnv string `yaml:"file_env,omitempty"`
+}
+
+type yamlProfile struct {
+	Subdir string `yaml:"subdir,omitempty"`
+	DirEnv string `yaml:"dir_env,omitempty"`
+}
+
+type yamlToken struct {
+	Cookie string `yaml:"cookie"`
+	Header string `yaml:"header"`
+	Prefix string `yaml:"prefix"`
+}
+
+type yamlAuth struct {
+	Method            string      `yaml:"method,omitempty"`
+	Path              string      `yaml:"path,omitempty"`
+	OKStatus          int         `yaml:"ok_status,omitempty"`
+	Token             *yamlToken  `yaml:"token,omitempty"`
+	Tokens            []yamlToken `yaml:"tokens,omitempty"`
+	UsernameJSONPaths []string    `yaml:"username_json_paths,omitempty"`
+	IdentityJSONPaths []string    `yaml:"identity_json_paths,omitempty"`
+	UserIDJSONPath    string      `yaml:"user_id_json_path,omitempty"`
+	UsernameForbidden []string    `yaml:"username_forbidden,omitempty"`
 }
 
 // WriteFile writes a site config to the sites directory.

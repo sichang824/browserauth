@@ -34,14 +34,15 @@ type ProfileConfig struct {
 }
 
 type AuthConfig struct {
-	Method              string       `yaml:"method"`
-	Path                string       `yaml:"path"`
-	OKStatus            int          `yaml:"ok_status"`
-	Token               *TokenConfig `yaml:"token"`
-	UsernameJSONPaths   []string     `yaml:"username_json_paths"`
-	IdentityJSONPaths   []string     `yaml:"identity_json_paths"`
-	UserIDJSONPath      string       `yaml:"user_id_json_path"`
-	UsernameForbidden   []string     `yaml:"username_forbidden"`
+	Method            string        `yaml:"method"`
+	Path              string        `yaml:"path"`
+	OKStatus          int           `yaml:"ok_status"`
+	Token             *TokenConfig  `yaml:"token"`
+	Tokens            []TokenConfig `yaml:"tokens"`
+	UsernameJSONPaths []string      `yaml:"username_json_paths"`
+	IdentityJSONPaths []string      `yaml:"identity_json_paths"`
+	UserIDJSONPath    string        `yaml:"user_id_json_path"`
+	UsernameForbidden []string      `yaml:"username_forbidden"`
 }
 
 // Session holds validated session details.

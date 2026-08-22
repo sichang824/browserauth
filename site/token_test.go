@@ -51,6 +51,46 @@ func TestAuthHeadersMissingTokenCookie(t *testing.T) {
 	}
 }
 
+func TestAuthHeadersMultipleTokens(t *testing.T) {
+	auth := AuthConfig{
+		Tokens: []TokenConfig{
+			{Cookie: "access_token", Header: "Authorization", Prefix: "Bearer "},
+			{Cookie: "csrf_token", Header: "x-csrf-token"},
+		},
+	}
+	headers := auth.authHeaders("access_token=jwt; csrf_token=csrf; other=x")
+	if headers["Authorization"] != "Bearer jwt" {
+		t.Fatalf("Authorization got %q", headers["Authorization"])
+	}
+	if headers["x-csrf-token"] != "csrf" {
+		t.Fatalf("x-csrf-token got %q", headers["x-csrf-token"])
+	}
+}
+
+func TestAuthHeadersSingularAndListMerge(t *testing.T) {
+	auth := AuthConfig{
+		Token:  &TokenConfig{Cookie: "access_token"},
+		Tokens: []TokenConfig{{Cookie: "csrf_token", Header: "x-csrf-token"}},
+	}
+	headers := auth.authHeaders("access_token=jwt; csrf_token=csrf")
+	if headers["Authorization"] != "Bearer jwt" || headers["x-csrf-token"] != "csrf" {
+		t.Fatalf("got %v", headers)
+	}
+}
+
+func TestAuthHeadersPartialMissingCookies(t *testing.T) {
+	auth := AuthConfig{
+		Tokens: []TokenConfig{
+			{Cookie: "access_token", Header: "Authorization", Prefix: "Bearer "},
+			{Cookie: "csrf_token", Header: "x-csrf-token"},
+		},
+	}
+	headers := auth.authHeaders("access_token=jwt")
+	if len(headers) != 1 || headers["Authorization"] != "Bearer jwt" {
+		t.Fatalf("got %v", headers)
+	}
+}
+
 func TestValidateHTTPWithBearerFromCookie(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer my-token-123" {
@@ -77,5 +117,24 @@ func TestValidateHTTPWithBearerFromCookie(t *testing.T) {
 	}
 	if username != "alice" {
 		t.Fatalf("got %q", username)
+	}
+}
+
+func TestJSONPathArrayIndex(t *testing.T) {
+	payload := map[string]any{
+		"workspaces": []any{
+			map[string]any{"id": "w1", "name": "Online Workspace"},
+			map[string]any{"id": "w2", "name": "Other"},
+		},
+	}
+	got, ok := jsonPath(payload, "workspaces.0.name")
+	if !ok || got != "Online Workspace" {
+		t.Fatalf("got %v ok=%v", got, ok)
+	}
+	if _, ok := jsonPath(payload, "workspaces.5.name"); ok {
+		t.Fatal("expected out-of-range to fail")
+	}
+	if _, ok := jsonPath(payload, "workspaces.x"); ok {
+		t.Fatal("expected non-numeric index on array to fail")
 	}
 }

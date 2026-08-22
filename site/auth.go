@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -171,15 +172,22 @@ func jsonPath(data any, path string) (any, bool) {
 		if part == "" {
 			return nil, false
 		}
-		obj, ok := current.(map[string]any)
-		if !ok {
+		switch node := current.(type) {
+		case map[string]any:
+			next, ok := node[part]
+			if !ok {
+				return nil, false
+			}
+			current = next
+		case []any:
+			index, err := strconv.Atoi(part)
+			if err != nil || index < 0 || index >= len(node) {
+				return nil, false
+			}
+			current = node[index]
+		default:
 			return nil, false
 		}
-		next, ok := obj[part]
-		if !ok {
-			return nil, false
-		}
-		current = next
 	}
 	return current, true
 }

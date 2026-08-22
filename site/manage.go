@@ -58,6 +58,54 @@ func Remove(id string) error {
 	return nil
 }
 
+// ValidSiteID reports whether id is safe to use as a site file name.
+func ValidSiteID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '-' || r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// DeriveEnvPrefix returns the conventional env prefix for a site id:
+// upper-cased with non-alphanumerics mapped to "_" ("dify-console" → "DIFY_CONSOLE").
+func DeriveEnvPrefix(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r - 'a' + 'A')
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// DeriveCookieMagic returns the conventional cookie magic for a site id:
+// upper-cased alphanumerics + "ENC\x01" ("hub-local" → "HUBLOCALENC\x01").
+func DeriveCookieMagic(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r - 'a' + 'A')
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		}
+	}
+	return b.String() + "ENC\x01"
+}
+
 // Add installs a site from a YAML file.
 func Add(id string, fromFile string, force bool) (string, error) {
 	id = strings.TrimSpace(id)

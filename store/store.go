@@ -67,6 +67,11 @@ func CookieFilePath(names AppNames) string {
 	return filepath.Join(DefaultDataDir(), "cookies", "default")
 }
 
+// RecordingsDir returns the directory for captured HAR recordings.
+func RecordingsDir() string {
+	return filepath.Join(DefaultDataDir(), "recordings")
+}
+
 // GlobalProfileDir returns the shared Chrome profile directory.
 func GlobalProfileDir() string {
 	if path := strings.TrimSpace(os.Getenv(globalProfileDirEnv)); path != "" {

@@ -10,10 +10,12 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"skills-browserauth/chromebrowser"
 	"skills-browserauth/httpclient"
 	"skills-browserauth/login"
+	"skills-browserauth/record"
 	"skills-browserauth/site"
 	"skills-browserauth/store"
 
@@ -44,6 +46,9 @@ func RunSite(args []string) int {
 	case "browser":
 		rest, isolated := parseIsolatedProfileFlag(rest)
 		return siteBrowser(cfg, isolated, rest)
+	case "record":
+		rest, isolated := parseIsolatedProfileFlag(rest)
+		return siteRecord(cfg, isolated, rest)
 	case "auth":
 		if len(rest) > 0 && rest[0] == "set" {
 			return siteAuthSet(cfg, rest[1:])
@@ -137,6 +142,54 @@ func siteBrowser(cfg site.Config, isolated bool, _ []string) int {
 			fmt.Printf("Cookie 已加密保存至 %s\n", res.CookiePath)
 		}
 	}
+	return 0
+}
+
+func siteRecord(cfg site.Config, isolated bool, rest []string) int {
+	startURL := cfg.ResolvedLoginURL()
+	if len(rest) > 1 {
+		fmt.Fprintf(os.Stderr, "Usage: browserauth %s record [--isolated-profile] [url]\n", cfg.ID)
+		return 2
+	}
+	if len(rest) == 1 {
+		startURL = strings.TrimSpace(rest[0])
+		if !strings.HasPrefix(startURL, "http://") && !strings.HasPrefix(startURL, "https://") {
+			fmt.Fprintf(os.Stderr, "record url must start with http:// or https:// (got %q)\n", startURL)
+			return 2
+		}
+	}
+
+	loginCfg := cfg.LoginConfig(isolated)
+	chromePath := chromebrowser.ChromeExecutable(loginCfg.ChromePathEnv)
+	if chromePath == "" {
+		chromePath = "(chromedp default Chromium)"
+	}
+	fmt.Fprintf(os.Stderr, "开始录制：%s\n", startURL)
+	fmt.Fprintf(os.Stderr, "Chrome: %s\n", chromePath)
+	fmt.Fprintf(os.Stderr, "Profile: %s\n", store.ProfileDirPath(cfg.StoreNames(), loginCfg.IsolatedProfile))
+	fmt.Fprintf(os.Stderr, "请点击页面右上角「⏹ 结束录制」停止；Ctrl+C 或关闭浏览器窗口也会保存录制。\n")
+
+	res, err := record.Run(context.Background(), record.Config{
+		SiteID:          cfg.ID,
+		StartURL:        startURL,
+		Names:           cfg.StoreNames(),
+		ChromePathEnv:   loginCfg.ChromePathEnv,
+		IsolatedProfile: loginCfg.IsolatedProfile,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		if res.HARPath == "" {
+			return 1
+		}
+	}
+
+	reason := map[record.StopReason]string{
+		record.StopButton:        "按钮",
+		record.StopSignal:        "Ctrl+C",
+		record.StopBrowserClosed: "浏览器关闭",
+	}[res.StopReason]
+	fmt.Fprintf(os.Stderr, "录制结束（%s），共 %d 条请求，用时 %s\n", reason, res.Entries, res.Duration.Round(time.Second))
+	fmt.Printf("%s\n", res.HARPath)
 	return 0
 }
 
