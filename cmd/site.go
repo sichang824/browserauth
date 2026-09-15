@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"skills-browserauth/httpclient"
 	"skills-browserauth/login"
 	"skills-browserauth/record"
+	"skills-browserauth/sessionmanager"
 	"skills-browserauth/site"
 	"skills-browserauth/store"
 
@@ -56,6 +58,8 @@ func RunSite(args []string) int {
 		return siteAuth(cfg, rest)
 	case "request":
 		return siteRequest(cfg, rest)
+	case "session":
+		return siteSession(cfg, rest)
 	case "cookie":
 		return siteCookie(cfg, rest)
 	default:
@@ -214,7 +218,7 @@ func siteAuth(cfg site.Config, _ []string) int {
 		return 2
 	}
 
-	session, err := cfg.FetchSession(cookie)
+	session, err := cfg.FetchConfiguredSession(context.Background(), cookie)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintf(os.Stderr, "Try: browserauth %s login\n", cfg.ID)
@@ -252,16 +256,23 @@ func siteAuthSet(cfg site.Config, args []string) int {
 }
 
 func siteRequest(cfg site.Config, args []string) int {
+	keepOpen := len(args) > 0 && args[0] == "--keep-open"
+	if keepOpen {
+		args = args[1:]
+	}
+	if len(args) > 0 && args[0] == "--requests" {
+		return siteRequests(cfg, keepOpen, args[1:])
+	}
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: browserauth %s request <METHOD> <PATH> [BODY]\n", cfg.ID)
+		fmt.Fprintf(os.Stderr, "Usage: browserauth %s request [--keep-open] <METHOD> <PATH> [BODY]\n       browserauth %s request [--keep-open] --requests [JSON_ARRAY]\n", cfg.ID, cfg.ID)
 		return 2
 	}
 
 	method := strings.ToUpper(strings.TrimSpace(args[0]))
 	path := args[1]
-	var body io.Reader
+	var bodyText string
 	if len(args) > 2 {
-		body = strings.NewReader(strings.Join(args[2:], " "))
+		bodyText = strings.Join(args[2:], " ")
 	} else if stat, _ := os.Stdin.Stat(); (stat.Mode() & os.ModeCharDevice) == 0 {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -269,8 +280,26 @@ func siteRequest(cfg site.Config, args []string) int {
 			return 2
 		}
 		if len(data) > 0 {
-			body = strings.NewReader(string(data))
+			bodyText = string(data)
 		}
+	}
+
+	headers := map[string]string{}
+	if bodyText != "" {
+		headers["Content-Type"] = "application/json"
+	}
+	if cfg.Auth.Transport == "browser" {
+		results, _ := executeBrowserRequests(cfg, []requestSpec{{Method: method, Path: path, rawBody: bodyText, Headers: headers}}, keepOpen)
+		if len(results) == 0 {
+			return 1
+		}
+		result := results[0]
+		return writeRequestResult(result.data, result.Status, result.err)
+	}
+
+	var body io.Reader
+	if bodyText != "" {
+		body = strings.NewReader(bodyText)
 	}
 
 	client, err := httpclient.New(httpclient.NewOptions{
@@ -284,12 +313,229 @@ func siteRequest(cfg site.Config, args []string) int {
 		return 2
 	}
 
-	headers := map[string]string{}
-	if body != nil {
-		headers["Content-Type"] = "application/json"
-	}
-
 	data, status, err := client.Do(method, path, body, headers)
+	return writeRequestResult(data, status, err)
+}
+
+func hasRetainedSession(siteID string) bool {
+	response, err := sessionmanager.Call(sessionmanager.Request{Action: "status"})
+	if err != nil {
+		return false
+	}
+	for _, item := range response.Sessions {
+		if item.Site == siteID {
+			return true
+		}
+	}
+	return false
+}
+
+func responseError(response sessionmanager.Response) error {
+	if response.OK {
+		return nil
+	}
+	if response.Error == "" {
+		return errors.New("retained browser request failed")
+	}
+	return errors.New(response.Error)
+}
+
+type requestSpec struct {
+	Method  string            `json:"method"`
+	Path    string            `json:"path"`
+	Body    json.RawMessage   `json:"body,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	rawBody string
+}
+
+type requestOutput struct {
+	Index    int             `json:"index"`
+	OK       bool            `json:"ok"`
+	Status   int             `json:"status,omitempty"`
+	Body     json.RawMessage `json:"body,omitempty"`
+	BodyText string          `json:"body_text,omitempty"`
+	Error    string          `json:"error,omitempty"`
+}
+
+type requestResult struct {
+	requestOutput
+	data []byte
+	err  error
+}
+
+func (r requestSpec) bodyText() (string, error) {
+	if r.rawBody != "" {
+		return r.rawBody, nil
+	}
+	if len(r.Body) == 0 || string(r.Body) == "null" {
+		return "", nil
+	}
+	if r.Body[0] == '"' {
+		var value string
+		if err := json.Unmarshal(r.Body, &value); err != nil {
+			return "", err
+		}
+		return value, nil
+	}
+	return string(r.Body), nil
+}
+
+func siteRequests(cfg site.Config, keepOpen bool, args []string) int {
+	var input []byte
+	if len(args) > 0 {
+		input = []byte(strings.Join(args, " "))
+	} else {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		input = data
+	}
+	var requests []requestSpec
+	if err := json.Unmarshal(input, &requests); err != nil {
+		fmt.Fprintf(os.Stderr, "requests must be a JSON array: %v\n", err)
+		return 2
+	}
+	if len(requests) == 0 {
+		fmt.Fprintln(os.Stderr, "requests must contain at least one request")
+		return 2
+	}
+	if cfg.Auth.Transport != "browser" {
+		fmt.Fprintln(os.Stderr, "multiple requests currently require auth.transport: browser")
+		return 2
+	}
+	results, failed := executeBrowserRequests(cfg, requests, keepOpen)
+	output := make([]requestOutput, len(results))
+	for index := range results {
+		output[index] = results[index].requestOutput
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(output); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if failed {
+		return 1
+	}
+	return 0
+}
+
+func executeBrowserRequests(cfg site.Config, requests []requestSpec, keepOpen bool) ([]requestResult, bool) {
+	useRetained := keepOpen || hasRetainedSession(cfg.ID)
+	var local *site.BrowserSession
+	if useRetained {
+		if err := sessionmanager.EnsureStarted(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return nil, true
+		}
+	} else {
+		cookie, err := store.ResolveCookie(cfg.StoreNames())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return nil, true
+		}
+		local, err = cfg.OpenBrowserSession(context.Background(), cookie, store.ResolveIsolatedProfile(cfg.StoreNames(), false))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return nil, true
+		}
+		defer local.Close()
+	}
+	results := make([]requestResult, 0, len(requests))
+	failed := false
+	for index, item := range requests {
+		body, bodyErr := item.bodyText()
+		if item.Headers == nil {
+			item.Headers = map[string]string{}
+		}
+		if body != "" {
+			if _, exists := item.Headers["Content-Type"]; !exists {
+				item.Headers["Content-Type"] = "application/json"
+			}
+		}
+		var data []byte
+		var status int
+		var err error
+		if bodyErr != nil {
+			err = bodyErr
+		} else if strings.TrimSpace(item.Method) == "" || strings.TrimSpace(item.Path) == "" {
+			err = errors.New("method and path are required")
+		} else if local != nil {
+			data, status, err = local.Request(item.Method, item.Path, body, item.Headers)
+		} else {
+			response, callErr := sessionmanager.Call(sessionmanager.Request{Action: "request", Site: cfg.ID, Method: item.Method, Path: item.Path, Body: body, Headers: item.Headers})
+			if callErr != nil {
+				err = callErr
+			} else {
+				data, status, err = []byte(response.Body), response.Status, responseError(response)
+			}
+		}
+		out := requestResult{requestOutput: requestOutput{Index: index, OK: err == nil, Status: status}, data: data, err: err}
+		if json.Valid(data) {
+			out.Body = json.RawMessage(data)
+		} else if len(data) > 0 {
+			out.BodyText = string(data)
+		}
+		if err != nil {
+			out.Error = err.Error()
+			failed = true
+		}
+		results = append(results, out)
+	}
+	return results, failed
+}
+
+func siteSession(cfg site.Config, args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintf(os.Stderr, "Usage: browserauth %s session start|status|stop\n", cfg.ID)
+		return 2
+	}
+	switch args[0] {
+	case "start":
+		if err := sessionmanager.EnsureStarted(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		response, err := sessionmanager.Call(sessionmanager.Request{Action: "start", Site: cfg.ID})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !response.OK {
+			fmt.Fprintln(os.Stderr, response.Error)
+			return 1
+		}
+		fmt.Printf("session ready: %s (%s)\n", cfg.ID, response.Username)
+		return 0
+	case "status":
+		response, err := sessionmanager.Call(sessionmanager.Request{Action: "status"})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "no retained browser session")
+			return 1
+		}
+		for _, item := range response.Sessions {
+			if item.Site == cfg.ID {
+				fmt.Printf("session ready: %s requests=%d idle=%s\n", cfg.ID, item.RequestCount, time.Since(item.LastUsed).Round(time.Second))
+				return 0
+			}
+		}
+		fmt.Printf("session not started: %s\n", cfg.ID)
+		return 1
+	case "stop":
+		response, err := sessionmanager.Call(sessionmanager.Request{Action: "stop_session", Site: cfg.ID})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "no retained browser session")
+			return 1
+		}
+		fmt.Printf("session stopped: %s (existed=%s)\n", cfg.ID, response.Body)
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "Usage: browserauth %s session start|status|stop\n", cfg.ID)
+		return 2
+	}
+}
+
+func writeRequestResult(data []byte, status int, err error) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

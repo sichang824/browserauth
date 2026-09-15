@@ -26,7 +26,7 @@ sites new options (all optional; defaults derived from <name>):
   --login-url PATH|URL    Browser entry (default /)
   --cookie-magic/--cookie-env/--cookie-file/--cookie-key-env/--cookie-file-env
   --profile-subdir/--profile-dir-env/--chrome-path-env/--no-fail-env
-  --auth-method/--auth-path/--ok-status
+  --auth-transport http|browser  --auth-method/--auth-path/--ok-status
   --username-path (repeatable)  --identity-path (repeatable)
   --userid-path                 --forbidden-username (repeatable)
   --token-cookie/--token-header/--token-prefix
@@ -144,6 +144,7 @@ func newSite(args []string) int {
 	profileDirEnv := fs.String("profile-dir-env", "", "profile dir env override")
 	chromePathEnv := fs.String("chrome-path-env", "", "Chrome binary env var (default <NAME>_CHROME_PATH)")
 	noFailEnv := fs.String("no-fail-env", "", "no-fail env var (default <NAME>_NO_FAIL)")
+	authTransport := fs.String("auth-transport", "", "auth/request transport: http (default) or browser")
 	authMethod := fs.String("auth-method", "", "auth check method (default GET)")
 	authPath := fs.String("auth-path", "", "auth check path (JSON API)")
 	okStatus := fs.Int("ok-status", 0, "auth check expected status (default 200)")
@@ -194,6 +195,7 @@ func newSite(args []string) int {
 		ChromePathEnv: firstNonEmpty(*chromePathEnv, prefix+"_CHROME_PATH"),
 		NoFailEnv:     firstNonEmpty(*noFailEnv, prefix+"_NO_FAIL"),
 		Auth: site.AuthConfig{
+			Transport:         *authTransport,
 			Method:            *authMethod,
 			Path:              *authPath,
 			OKStatus:          *okStatus,

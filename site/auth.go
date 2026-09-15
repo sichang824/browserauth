@@ -84,6 +84,10 @@ func (c Config) validateHTTPWithBase(baseURL, cookieHeader string) (string, map[
 		}
 	}
 
+	return c.validatePayload(payload)
+}
+
+func (c Config) validatePayload(payload any) (string, map[string]any, error) {
 	for _, path := range c.Auth.IdentityJSONPaths {
 		value, ok := jsonPath(payload, path)
 		if !ok || isEmptyValue(value) {

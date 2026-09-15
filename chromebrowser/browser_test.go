@@ -41,3 +41,13 @@ func TestExecAllocatorOptionsAvoidsAutomationDefaults(t *testing.T) {
 		t.Fatalf("too few options: %d", len(opts))
 	}
 }
+
+func TestAvailableLoopbackPort(t *testing.T) {
+	port, err := availableLoopbackPort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port <= 0 || port > 65535 {
+		t.Fatalf("invalid port %d", port)
+	}
+}

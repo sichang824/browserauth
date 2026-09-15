@@ -1,0 +1,22 @@
+# Douyin (抖音). Login UI is www.douyin.com/jingxuan. Feed/search APIs
+# typically send a_bogus, but /aweme/v1/web/user/profile/self/ returns the
+# logged-in user with only cookies (HAR 2026-08-25). The previously guessed
+# passport /account/info/v2/ path 404s on www.douyin.com.
+id: douyin
+base_url: https://www.douyin.com
+login_url: /jingxuan
+cookie:
+  magic: "DOUYINENC\x01"
+  env: DOUYIN_COOKIE
+chrome_path_env: DOUYIN_CHROME_PATH
+no_fail_env: DOUYIN_NO_FAIL
+auth:
+  method: GET
+  path: /aweme/v1/web/user/profile/self/?aid=6383
+  ok_status: 200
+  username_json_paths:
+    - user.nickname
+    - user.unique_id
+  identity_json_paths:
+    - user.sec_uid
+  user_id_json_path: user.uid

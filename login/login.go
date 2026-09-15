@@ -17,6 +17,7 @@ import (
 
 // SessionValidator checks whether a cookie header represents an authenticated session.
 type SessionValidator func(baseURL, cookieHeader string) (username string, err error)
+type BrowserSessionValidator func(ctx context.Context, cookieHeader string) (username string, err error)
 
 // Config drives browser login and cookie capture for one app.
 type Config struct {
@@ -26,13 +27,14 @@ type Config struct {
 	ChromePathEnv   string
 	IsolatedProfile bool
 	Validate        SessionValidator
+	ValidateBrowser BrowserSessionValidator
 }
 
 // Result is returned after a successful login capture.
 type Result struct {
-	Username   string
-	CookiePath string
-	ProfileDir string
+	Username    string
+	CookiePath  string
+	ProfileDir  string
 	CookieCount int
 }
 
@@ -156,9 +158,21 @@ func tryPersist(ctx context.Context, cfg Config, passphrase, profileDir string) 
 	}
 
 	cookieLine := formatCookies(cookies)
-	username, err := cfg.Validate(cfg.BaseURL, cookieLine)
+	var username string
+	if cfg.ValidateBrowser != nil {
+		username, err = cfg.ValidateBrowser(ctx, cookieLine)
+	} else {
+		username, err = cfg.Validate(cfg.BaseURL, cookieLine)
+	}
 	if err != nil {
 		return Result{}, false, nil
+	}
+	if cfg.ValidateBrowser != nil {
+		cookies, err = getBrowserCookies(ctx, cfg)
+		if err != nil || len(cookies) == 0 {
+			return Result{}, false, nil
+		}
+		cookieLine = formatCookies(cookies)
 	}
 
 	cookiePath, err := store.WriteEncryptedCookie(cfg.Names, cookieLine, passphrase)
@@ -172,6 +186,20 @@ func tryPersist(ctx context.Context, cfg Config, passphrase, profileDir string) 
 		ProfileDir:  profileDir,
 		CookieCount: len(cookies),
 	}, true, nil
+}
+
+func getBrowserCookies(ctx context.Context, cfg Config) ([]*network.Cookie, error) {
+	var cookies []*network.Cookie
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		urls := []string{cfg.BaseURL}
+		if cfg.LoginURL != "" && !strings.HasPrefix(cfg.LoginURL, cfg.BaseURL) {
+			urls = append(urls, cfg.LoginURL)
+		}
+		var getErr error
+		cookies, getErr = network.GetCookies().WithURLs(urls).Do(ctx)
+		return getErr
+	}))
+	return cookies, err
 }
 
 func formatCookies(cookies []*network.Cookie) string {

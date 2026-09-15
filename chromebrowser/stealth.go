@@ -9,7 +9,9 @@ import (
 
 // stealthInitScript hides common automation markers on every new document.
 const stealthInitScript = `
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+if (navigator.webdriver === true) {
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+}
 window.chrome = window.chrome || { runtime: {} };
 `
 

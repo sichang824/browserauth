@@ -9,12 +9,15 @@ const usage = `browserauth - cookie-auth CLI for any configured web site
 
 Usage:
   browserauth sites list|path|show|init|add|remove
+  browserauth session status|stop
   browserauth <site> login [--isolated-profile]
   browserauth <site> browser [--isolated-profile]
   browserauth <site> record [--isolated-profile] [url]   Record traffic to HAR
   browserauth <site> auth
   browserauth <site> auth set [COOKIE]
-  browserauth <site> request <METHOD> <PATH> [BODY]
+  browserauth <site> request [--keep-open] <METHOD> <PATH> [BODY]
+  browserauth <site> request [--keep-open] --requests [JSON_ARRAY]
+  browserauth <site> session start|status|stop
   browserauth <site> cookie          Print resolved cookie (for shell scripts)
   browserauth help
 
@@ -66,6 +69,10 @@ func Run(args []string) int {
 		return 0
 	case "sites":
 		return Sites(args[1:])
+	case "session":
+		return SessionManager(args[1:])
+	case "_session_manager":
+		return internalSessionManager(args[1:])
 	default:
 		return RunSite(args)
 	}

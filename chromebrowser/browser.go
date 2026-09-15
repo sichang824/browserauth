@@ -1,8 +1,10 @@
 package chromebrowser
 
 import (
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 
 	"github.com/chromedp/chromedp"
 )
@@ -38,13 +40,28 @@ func ExecAllocatorOptions(profileDir, chromePathEnv string) []chromedp.ExecAlloc
 		chromedp.Flag("headless", false),
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("disable-extensions", false),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("exclude-switches", "enable-automation"),
-		chromedp.Flag("disable-infobars", true),
 		chromedp.WindowSize(1440, 900),
+	}
+	// chromedp defaults to --remote-debugging-port=0. Chromium treats that
+	// exact flag as an automation signal and exposes navigator.webdriver,
+	// which causes strict WAFs to reject an otherwise normal headed session.
+	// A dynamically reserved non-zero loopback port keeps CDP available
+	// without enabling the webdriver marker.
+	if port, err := availableLoopbackPort(); err == nil {
+		opts = append(opts, chromedp.Flag("remote-debugging-port", strconv.Itoa(port)))
 	}
 	if chromePath := ChromeExecutable(chromePathEnv); chromePath != "" {
 		opts = append(opts, chromedp.ExecPath(chromePath))
 	}
 	return opts
+}
+
+func availableLoopbackPort() (int, error) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port, nil
 }

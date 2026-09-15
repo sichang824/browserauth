@@ -1,8 +1,10 @@
 package site
 
 import (
+	"context"
 	"os"
 	"strings"
+	"time"
 
 	"skills-browserauth/login"
 	"skills-browserauth/store"
@@ -15,17 +17,39 @@ type Config struct {
 	LoginURL      string        `yaml:"login_url"`
 	Cookie        CookieConfig  `yaml:"cookie"`
 	Profile       ProfileConfig `yaml:"profile"`
+	Browser       BrowserConfig `yaml:"browser"`
 	ChromePathEnv string        `yaml:"chrome_path_env"`
 	Auth          AuthConfig    `yaml:"auth"`
 	NoFailEnv     string        `yaml:"no_fail_env"`
 }
 
+// BrowserConfig controls how browser-backed requests reuse Chrome.
+type BrowserConfig struct {
+	IdleTimeout string `yaml:"idle_timeout"`
+	MaxLifetime string `yaml:"max_lifetime"`
+	EntryText   string `yaml:"entry_text"`
+}
+
+func (c Config) BrowserIdleTimeout() time.Duration {
+	if d, err := time.ParseDuration(strings.TrimSpace(c.Browser.IdleTimeout)); err == nil && d > 0 {
+		return d
+	}
+	return 0
+}
+
+func (c Config) BrowserMaxLifetime() time.Duration {
+	if d, err := time.ParseDuration(strings.TrimSpace(c.Browser.MaxLifetime)); err == nil && d > 0 {
+		return d
+	}
+	return 0
+}
+
 type CookieConfig struct {
-	Magic     string `yaml:"magic"`
-	File      string `yaml:"file"`
-	KeyEnv    string `yaml:"key_env"`
-	Env       string `yaml:"env"`
-	FileEnv   string `yaml:"file_env"`
+	Magic   string `yaml:"magic"`
+	File    string `yaml:"file"`
+	KeyEnv  string `yaml:"key_env"`
+	Env     string `yaml:"env"`
+	FileEnv string `yaml:"file_env"`
 }
 
 type ProfileConfig struct {
@@ -34,6 +58,7 @@ type ProfileConfig struct {
 }
 
 type AuthConfig struct {
+	Transport         string        `yaml:"transport"`
 	Method            string        `yaml:"method"`
 	Path              string        `yaml:"path"`
 	OKStatus          int           `yaml:"ok_status"`
@@ -95,7 +120,7 @@ func (c Config) ResolvedLoginURL() string {
 // LoginConfig builds login capture settings for this site.
 func (c Config) LoginConfig(isolatedProfileFlag bool) login.Config {
 	names := c.StoreNames()
-	return login.Config{
+	cfg := login.Config{
 		BaseURL:         c.ResolvedBaseURL(),
 		LoginURL:        c.ResolvedLoginURL(),
 		Names:           names,
@@ -103,6 +128,13 @@ func (c Config) LoginConfig(isolatedProfileFlag bool) login.Config {
 		IsolatedProfile: store.ResolveIsolatedProfile(names, isolatedProfileFlag),
 		Validate:        c.ValidateSession,
 	}
+	if c.Auth.Transport == "browser" {
+		cfg.ValidateBrowser = func(ctx context.Context, cookieHeader string) (string, error) {
+			session, err := c.validateBrowserSessionOnce(ctx, cookieHeader)
+			return session.Username, err
+		}
+	}
+	return cfg
 }
 
 // Passphrase reads the encryption key for cookie files.

@@ -20,6 +20,9 @@ One CLI for browser login, session verify, and cookie-authenticated HTTP — **n
 | `browserauth <site> auth` | Verify session |
 | `browserauth <site> auth set` | Store encrypted cookie manually |
 | `browserauth <site> request <METHOD> <PATH> [BODY]` | Authenticated HTTP |
+| `browserauth <site> request --requests '[…]'` | One or more requests over one browser session |
+| `browserauth <site> session start\|status\|stop` | Manage one site's retained browser session |
+| `browserauth session status\|stop` | Inspect or close retained browser sessions |
 | `browserauth <site> record [url]` | Record tab traffic to HAR (stop via injected ⏹ button) |
 | `browserauth <site> cookie` | Print cookie for shell/`oapi --cookie` (do not log) |
 
@@ -92,7 +95,26 @@ browserauth sites path
 Flags go **before** the site id (Go `flag` stops at the first positional):
 `browserauth sites add --force --from-file <yaml> <id>`.
 
-Site YAML `auth` supports cookie→header token mapping: `token: {cookie, header, prefix}`
+Site YAML `auth.transport` defaults to `http`; set it to `browser` for WAF-protected
+sites that require a real browser/TLS fingerprint. `request` accepts either the legacy
+single-request arguments or `--requests` with a JSON array containing one or more
+requests. It opens one browser, reuses it for every request in the array, then closes it.
+Add `--keep-open` when later commands should retain and reuse that browser. Once
+retained, ordinary later `request` commands reuse it without repeating the flag and
+do not close it. It remains available until the browser window is closed or
+`browserauth <site> session stop` is run. Optional `browser.idle_timeout` and
+`browser.max_lifetime` values can impose explicit limits. The local session socket is mode 0600 and
+business URLs must be same-origin paths. The configured read-only auth check may poll,
+but each business request is sent once and never retried.
+
+Browser-backed business requests also appear in a fixed monitor panel at the top of
+the managed tab. The compact list shows method, path, HTTP status, and duration. Click
+a row to inspect its request/response body, or use **全屏** for the complete panel.
+The newest 100 entries survive same-tab navigation through `sessionStorage`; auth
+headers and cookies are deliberately excluded from the panel. Drag the title bar to
+move the panel away from page controls; its position survives same-tab navigation,
+and double-clicking the title bar restores the default top-center position.
+`auth` also supports cookie→header token mapping: `token: {cookie, header, prefix}`
 or a `tokens:` list when an API needs several derived headers (e.g. dify-console sends
 both `Authorization: Bearer` and `x-csrf-token`). `username_json_paths` /
 `identity_json_paths` support dotted paths with array indices (`workspaces.0.name`).
@@ -108,7 +130,7 @@ the format cannot derive):
 ```bash
 browserauth sites new xiaohongshu --base-url https://www.xiaohongshu.com \
   --login-url "/explore?channel_id=homefeed.love_v3"
-# optional: --auth-method/--auth-path/--ok-status/--username-path (repeatable)
+# optional: --auth-transport http|browser/--auth-method/--auth-path/--ok-status/--username-path (repeatable)
 #   --identity-path/--userid-path/--token-cookie+--token-header+--token-prefix
 #   --cookie-env/--cookie-magic/--chrome-path-env/--no-fail-env/--force ...
 # prints the created site's resolved info + YAML path
@@ -132,8 +154,10 @@ Cookie file: `~/.browserauth/cookies/myapp`
 | chatgpt | [chatgpt skill](../chatgpt/SKILL.md) headed Chrome send | `browserauth chatgpt ...` |
 | dify-console | Dify console API (`yai.dhb168.com/console/api`); see [dify skill](../dify/SKILL.md) | `browserauth dify-console …` → `tokens:` sends Bearer + x-csrf-token |
 | xiaohongshu | 小红书：login 在 `www.xiaohongshu.com`，auth 用 creator 平台 galaxy API | 主站 API 需 x-s/x-t 签名无法裸 Cookie 调用；galaxy `/api/galaxy/user/info` 免签名且认 www 的 `web_session` |
+| etax | 自然人电子税务局 WEB 端扣缴 | `auth.transport: browser` 绕过严格 WAF；校验 `/web/zh/loginstatus/check` |
+| douyin | 抖音：login 在 `www.douyin.com/jingxuan` | auth 用 `/aweme/v1/web/user/profile/self/?aid=6383`（HAR 验证可裸 Cookie；feed 等接口仍常带 a_bogus） |
 
-Site YAML templates: `references/sites/` (includes `authz.yaml`, `chatgpt.yaml`, `dify-console.yaml`, `xiaohongshu.yaml`).
+Site YAML templates: `references/sites/` (includes `authz.yaml`, `chatgpt.yaml`, `dify-console.yaml`, `xiaohongshu.yaml`, `douyin.yaml`, `etax.yaml`).
 
 ### AuthZ notes
 

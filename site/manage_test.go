@@ -193,9 +193,10 @@ func TestMarshalYAMLKeepsAuthAndToken(t *testing.T) {
 		LoginURL: "https://example.com/login",
 		Cookie:   CookieConfig{Magic: "AUTHZENC\x01", Env: "AUTHZ_COOKIE"},
 		Auth: AuthConfig{
-			Method: "POST",
-			Path:   "/users/me",
-			Token:  &TokenConfig{Cookie: "access_token", Header: "Authorization", Prefix: "Bearer "},
+			Transport: "browser",
+			Method:    "POST",
+			Path:      "/users/me",
+			Token:     &TokenConfig{Cookie: "access_token", Header: "Authorization", Prefix: "Bearer "},
 		},
 	}
 	data, err := MarshalYAML(cfg)
@@ -206,10 +207,17 @@ func TestMarshalYAMLKeepsAuthAndToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back.Auth.Method != "POST" || back.Auth.Token == nil || back.Auth.Token.Prefix != "Bearer " {
+	if back.Auth.Transport != "browser" || back.Auth.Method != "POST" || back.Auth.Token == nil || back.Auth.Token.Prefix != "Bearer " {
 		t.Fatalf("round-trip lost auth/token: %+v", back.Auth)
 	}
 	if back.LoginURL != "https://example.com/login" {
 		t.Fatalf("absolute login_url lost: %q", back.LoginURL)
+	}
+}
+
+func TestParseConfigRejectsUnknownAuthTransport(t *testing.T) {
+	_, err := parseConfig([]byte("id: bad\nbase_url: https://example.com\ncookie:\n  magic: BADENC\\x01\nauth:\n  transport: teleport\n"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported auth.transport") {
+		t.Fatalf("expected unsupported transport error, got %v", err)
 	}
 }

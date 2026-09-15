@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -85,6 +86,20 @@ func parseConfig(data []byte) (Config, error) {
 	if cfg.LoginURL == "" {
 		cfg.LoginURL = "/"
 	}
+	cfg.Auth.Transport = strings.ToLower(strings.TrimSpace(cfg.Auth.Transport))
+	switch cfg.Auth.Transport {
+	case "", "http", "browser":
+	default:
+		return Config{}, fmt.Errorf("site %q has unsupported auth.transport %q", cfg.ID, cfg.Auth.Transport)
+	}
+	for name, value := range map[string]string{"idle_timeout": cfg.Browser.IdleTimeout, "max_lifetime": cfg.Browser.MaxLifetime} {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		if duration, err := time.ParseDuration(value); err != nil || duration <= 0 {
+			return Config{}, fmt.Errorf("site %q has invalid browser.%s %q", cfg.ID, name, value)
+		}
+	}
 	return cfg, nil
 }
 
@@ -115,7 +130,12 @@ func MarshalYAML(cfg Config) ([]byte, error) {
 	if profile != (yamlProfile{}) {
 		out.Profile = &profile
 	}
+	browser := yamlBrowser{IdleTimeout: cfg.Browser.IdleTimeout, MaxLifetime: cfg.Browser.MaxLifetime, EntryText: cfg.Browser.EntryText}
+	if browser != (yamlBrowser{}) {
+		out.Browser = &browser
+	}
 	auth := yamlAuth{
+		Transport:         cfg.Auth.Transport,
 		Method:            cfg.Auth.Method,
 		Path:              cfg.Auth.Path,
 		OKStatus:          cfg.Auth.OKStatus,
@@ -130,7 +150,7 @@ func MarshalYAML(cfg Config) ([]byte, error) {
 	for _, tk := range cfg.Auth.Tokens {
 		auth.Tokens = append(auth.Tokens, yamlToken{Cookie: tk.Cookie, Header: tk.Header, Prefix: tk.Prefix})
 	}
-	if auth.Method != "" || auth.Path != "" || auth.OKStatus != 0 || auth.Token != nil ||
+	if auth.Transport != "" || auth.Method != "" || auth.Path != "" || auth.OKStatus != 0 || auth.Token != nil ||
 		len(auth.Tokens) > 0 || len(auth.UsernameJSONPaths) > 0 || len(auth.IdentityJSONPaths) > 0 ||
 		auth.UserIDJSONPath != "" || len(auth.UsernameForbidden) > 0 {
 		out.Auth = &auth
@@ -145,9 +165,16 @@ type yamlConfig struct {
 	LoginURL      string       `yaml:"login_url,omitempty"`
 	Cookie        *yamlCookie  `yaml:"cookie,omitempty"`
 	Profile       *yamlProfile `yaml:"profile,omitempty"`
+	Browser       *yamlBrowser `yaml:"browser,omitempty"`
 	ChromePathEnv string       `yaml:"chrome_path_env,omitempty"`
 	Auth          *yamlAuth    `yaml:"auth,omitempty"`
 	NoFailEnv     string       `yaml:"no_fail_env,omitempty"`
+}
+
+type yamlBrowser struct {
+	IdleTimeout string `yaml:"idle_timeout,omitempty"`
+	MaxLifetime string `yaml:"max_lifetime,omitempty"`
+	EntryText   string `yaml:"entry_text,omitempty"`
 }
 
 type yamlCookie struct {
@@ -170,6 +197,7 @@ type yamlToken struct {
 }
 
 type yamlAuth struct {
+	Transport         string      `yaml:"transport,omitempty"`
 	Method            string      `yaml:"method,omitempty"`
 	Path              string      `yaml:"path,omitempty"`
 	OKStatus          int         `yaml:"ok_status,omitempty"`
