@@ -9,8 +9,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"skills-browserauth/chromebrowser"
@@ -60,6 +60,10 @@ func RunSite(args []string) int {
 		return siteRequest(cfg, rest)
 	case "session":
 		return siteSession(cfg, rest)
+	case "xhr":
+		return siteXHR(cfg, rest)
+	case "page":
+		return sitePage(cfg, rest)
 	case "cookie":
 		return siteCookie(cfg, rest)
 	default:
@@ -137,7 +141,7 @@ func siteBrowser(cfg site.Config, isolated bool, _ []string) int {
 	fmt.Fprintf(os.Stderr, "按 Ctrl+C 退出。\n")
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, stopSignals()...)
 	<-sigCh
 
 	if key, err := cfg.Passphrase(); err == nil {
@@ -256,15 +260,30 @@ func siteAuthSet(cfg site.Config, args []string) int {
 }
 
 func siteRequest(cfg site.Config, args []string) int {
-	keepOpen := len(args) > 0 && args[0] == "--keep-open"
-	if keepOpen {
-		args = args[1:]
+	keepOpen, observe := false, false
+	for len(args) > 0 {
+		switch args[0] {
+		case "--keep-open":
+			keepOpen = true
+			args = args[1:]
+		case "--observe":
+			observe = true
+			args = args[1:]
+		default:
+			goto flagsDone
+		}
+	}
+
+flagsDone:
+	if observe && !keepOpen && !hasRetainedSession(cfg.ID) {
+		fmt.Fprintln(os.Stderr, "--observe requires --keep-open or an already retained session")
+		return 2
 	}
 	if len(args) > 0 && args[0] == "--requests" {
-		return siteRequests(cfg, keepOpen, args[1:])
+		return siteRequests(cfg, keepOpen, observe, args[1:])
 	}
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: browserauth %s request [--keep-open] <METHOD> <PATH> [BODY]\n       browserauth %s request [--keep-open] --requests [JSON_ARRAY]\n", cfg.ID, cfg.ID)
+		fmt.Fprintf(os.Stderr, "Usage: browserauth %s request [--keep-open] [--observe] <METHOD> <PATH> [BODY]\n       browserauth %s request [--keep-open] [--observe] --requests [JSON_ARRAY]\n", cfg.ID, cfg.ID)
 		return 2
 	}
 
@@ -289,7 +308,7 @@ func siteRequest(cfg site.Config, args []string) int {
 		headers["Content-Type"] = "application/json"
 	}
 	if cfg.Auth.Transport == "browser" {
-		results, _ := executeBrowserRequests(cfg, []requestSpec{{Method: method, Path: path, rawBody: bodyText, Headers: headers}}, keepOpen)
+		results, _ := executeBrowserRequests(cfg, []requestSpec{{Method: method, Path: path, rawBody: bodyText, Headers: headers}}, keepOpen, observe)
 		if len(results) == 0 {
 			return 1
 		}
@@ -380,7 +399,7 @@ func (r requestSpec) bodyText() (string, error) {
 	return string(r.Body), nil
 }
 
-func siteRequests(cfg site.Config, keepOpen bool, args []string) int {
+func siteRequests(cfg site.Config, keepOpen, observe bool, args []string) int {
 	var input []byte
 	if len(args) > 0 {
 		input = []byte(strings.Join(args, " "))
@@ -405,7 +424,7 @@ func siteRequests(cfg site.Config, keepOpen bool, args []string) int {
 		fmt.Fprintln(os.Stderr, "multiple requests currently require auth.transport: browser")
 		return 2
 	}
-	results, failed := executeBrowserRequests(cfg, requests, keepOpen)
+	results, failed := executeBrowserRequests(cfg, requests, keepOpen, observe)
 	output := make([]requestOutput, len(results))
 	for index := range results {
 		output[index] = results[index].requestOutput
@@ -420,7 +439,7 @@ func siteRequests(cfg site.Config, keepOpen bool, args []string) int {
 	return 0
 }
 
-func executeBrowserRequests(cfg site.Config, requests []requestSpec, keepOpen bool) ([]requestResult, bool) {
+func executeBrowserRequests(cfg site.Config, requests []requestSpec, keepOpen, observe bool) ([]requestResult, bool) {
 	useRetained := keepOpen || hasRetainedSession(cfg.ID)
 	var local *site.BrowserSession
 	if useRetained {
@@ -461,9 +480,18 @@ func executeBrowserRequests(cfg site.Config, requests []requestSpec, keepOpen bo
 		} else if strings.TrimSpace(item.Method) == "" || strings.TrimSpace(item.Path) == "" {
 			err = errors.New("method and path are required")
 		} else if local != nil {
-			data, status, err = local.Request(item.Method, item.Path, body, item.Headers)
+			if observe {
+				if enableErr := local.EnableXHRObserver(); enableErr != nil {
+					err = enableErr
+				}
+			}
+			if err != nil {
+				// Skip the request when observation could not be enabled.
+			} else {
+				data, status, err = local.Request(item.Method, item.Path, body, item.Headers)
+			}
 		} else {
-			response, callErr := sessionmanager.Call(sessionmanager.Request{Action: "request", Site: cfg.ID, Method: item.Method, Path: item.Path, Body: body, Headers: item.Headers})
+			response, callErr := sessionmanager.Call(sessionmanager.Request{Action: "request", Site: cfg.ID, Method: item.Method, Path: item.Path, Body: body, Headers: item.Headers, Observe: observe})
 			if callErr != nil {
 				err = callErr
 			} else {
@@ -486,17 +514,22 @@ func executeBrowserRequests(cfg site.Config, requests []requestSpec, keepOpen bo
 }
 
 func siteSession(cfg site.Config, args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintf(os.Stderr, "Usage: browserauth %s session start|status|stop\n", cfg.ID)
+	if len(args) < 1 || len(args) > 2 {
+		fmt.Fprintf(os.Stderr, "Usage: browserauth %s session start [--observe]|status|stop\n", cfg.ID)
 		return 2
 	}
 	switch args[0] {
 	case "start":
+		observe := len(args) == 2 && args[1] == "--observe"
+		if len(args) == 2 && !observe {
+			fmt.Fprintf(os.Stderr, "Usage: browserauth %s session start [--observe]\n", cfg.ID)
+			return 2
+		}
 		if err := sessionmanager.EnsureStarted(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		response, err := sessionmanager.Call(sessionmanager.Request{Action: "start", Site: cfg.ID})
+		response, err := sessionmanager.Call(sessionmanager.Request{Action: "start", Site: cfg.ID, Observe: observe})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -505,7 +538,7 @@ func siteSession(cfg site.Config, args []string) int {
 			fmt.Fprintln(os.Stderr, response.Error)
 			return 1
 		}
-		fmt.Printf("session ready: %s (%s)\n", cfg.ID, response.Username)
+		fmt.Printf("session ready: %s (%s) observe=%t\n", cfg.ID, response.Username, observe)
 		return 0
 	case "status":
 		response, err := sessionmanager.Call(sessionmanager.Request{Action: "status"})
@@ -530,9 +563,207 @@ func siteSession(cfg site.Config, args []string) int {
 		fmt.Printf("session stopped: %s (existed=%s)\n", cfg.ID, response.Body)
 		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: browserauth %s session start|status|stop\n", cfg.ID)
+		fmt.Fprintf(os.Stderr, "Usage: browserauth %s session start [--observe]|status|stop\n", cfg.ID)
 		return 2
 	}
+}
+
+func siteXHR(cfg site.Config, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: browserauth %s xhr status|list|get|wait|clear\n", cfg.ID)
+		return 2
+	}
+	req := sessionmanager.Request{Site: cfg.ID}
+	rawResponse := false
+	switch args[0] {
+	case "status":
+		if len(args) != 1 {
+			return xhrUsage(cfg)
+		}
+		req.Action = "xhr_status"
+	case "list":
+		req.Action = "xhr_list"
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--match":
+				i++
+				if i >= len(args) {
+					return xhrUsage(cfg)
+				}
+				req.Match = args[i]
+			case "--limit":
+				i++
+				if i >= len(args) {
+					return xhrUsage(cfg)
+				}
+				value, err := strconv.Atoi(args[i])
+				if err != nil || value < 1 {
+					fmt.Fprintln(os.Stderr, "--limit must be a positive integer")
+					return 2
+				}
+				req.Limit = value
+			default:
+				return xhrUsage(cfg)
+			}
+		}
+	case "get":
+		if len(args) < 2 || len(args) > 3 {
+			return xhrUsage(cfg)
+		}
+		req.Action, req.ID = "xhr_get", args[1]
+		if len(args) == 3 {
+			if args[2] != "--response" {
+				return xhrUsage(cfg)
+			}
+			rawResponse = true
+		}
+	case "wait":
+		req.Action, req.TimeoutMS = "xhr_wait", int64((30 * time.Second).Milliseconds())
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--match":
+				i++
+				if i >= len(args) {
+					return xhrUsage(cfg)
+				}
+				req.Match = args[i]
+			case "--after":
+				i++
+				value, err := strconv.ParseInt(valueAt(args, i), 10, 64)
+				if err != nil || value < 0 {
+					fmt.Fprintln(os.Stderr, "--after must be a non-negative integer")
+					return 2
+				}
+				req.AfterSequence = value
+			case "--timeout":
+				i++
+				duration, err := time.ParseDuration(valueAt(args, i))
+				if err != nil || duration <= 0 {
+					fmt.Fprintln(os.Stderr, "--timeout must be a positive duration, for example 30s")
+					return 2
+				}
+				req.TimeoutMS = duration.Milliseconds()
+			default:
+				return xhrUsage(cfg)
+			}
+		}
+	case "clear":
+		if len(args) != 1 {
+			return xhrUsage(cfg)
+		}
+		req.Action = "xhr_clear"
+	default:
+		return xhrUsage(cfg)
+	}
+	response, err := sessionmanager.Call(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := responseError(response); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if rawResponse {
+		var record site.XHRRecord
+		if err := json.Unmarshal([]byte(response.Body), &record); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Print(record.ResponseBody)
+		if record.ResponseBody != "" && !strings.HasSuffix(record.ResponseBody, "\n") {
+			fmt.Println()
+		}
+		return 0
+	}
+	fmt.Println(response.Body)
+	return 0
+}
+
+func xhrUsage(cfg site.Config) int {
+	fmt.Fprintf(os.Stderr, "Usage:\n  browserauth %s xhr status\n  browserauth %s xhr list [--match TEXT] [--limit N]\n  browserauth %s xhr get ID [--response]\n  browserauth %s xhr wait [--match TEXT] [--after N] [--timeout 30s]\n  browserauth %s xhr clear\n", cfg.ID, cfg.ID, cfg.ID, cfg.ID, cfg.ID)
+	return 2
+}
+
+func valueAt(args []string, index int) string {
+	if index < 0 || index >= len(args) {
+		return ""
+	}
+	return args[index]
+}
+
+func sitePage(cfg site.Config, args []string) int {
+	if len(args) == 0 {
+		return pageUsage(cfg)
+	}
+	req := sessionmanager.Request{Site: cfg.ID}
+	switch args[0] {
+	case "reload":
+		if len(args) != 1 {
+			return pageUsage(cfg)
+		}
+		req.Action = "page_reload"
+	case "scroll":
+		req.Action, req.Times, req.DeltaY, req.TimeoutMS = "page_scroll", 1, 800, int64((30 * time.Second).Milliseconds())
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--times":
+				i++
+				value, err := strconv.Atoi(valueAt(args, i))
+				if err != nil || value < 1 {
+					fmt.Fprintln(os.Stderr, "--times must be a positive integer")
+					return 2
+				}
+				req.Times = value
+			case "--delta":
+				i++
+				value, err := strconv.ParseFloat(valueAt(args, i), 64)
+				if err != nil || value == 0 {
+					fmt.Fprintln(os.Stderr, "--delta must be a non-zero number")
+					return 2
+				}
+				req.DeltaY = value
+			case "--wait-xhr":
+				i++
+				if i >= len(args) {
+					return pageUsage(cfg)
+				}
+				req.Match = args[i]
+			case "--timeout":
+				i++
+				duration, err := time.ParseDuration(valueAt(args, i))
+				if err != nil || duration <= 0 {
+					fmt.Fprintln(os.Stderr, "--timeout must be a positive duration")
+					return 2
+				}
+				req.TimeoutMS = duration.Milliseconds()
+			default:
+				return pageUsage(cfg)
+			}
+		}
+	default:
+		return pageUsage(cfg)
+	}
+	response, err := sessionmanager.Call(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := responseError(response); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if response.Body != "" {
+		fmt.Println(response.Body)
+	} else {
+		fmt.Println("ok")
+	}
+	return 0
+}
+
+func pageUsage(cfg site.Config) int {
+	fmt.Fprintf(os.Stderr, "Usage:\n  browserauth %s page reload\n  browserauth %s page scroll [--times N] [--delta PX] [--wait-xhr TEXT] [--timeout 30s]\n", cfg.ID, cfg.ID)
+	return 2
 }
 
 func writeRequestResult(data []byte, status int, err error) int {

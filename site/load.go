@@ -100,6 +100,14 @@ func parseConfig(data []byte) (Config, error) {
 			return Config{}, fmt.Errorf("site %q has invalid browser.%s %q", cfg.ID, name, value)
 		}
 	}
+	for _, name := range cfg.Browser.ClearHostCookies {
+		if strings.TrimSpace(name) == "" {
+			return Config{}, fmt.Errorf("site %q has empty browser.clear_host_cookies entry", cfg.ID)
+		}
+	}
+	if len(cfg.Browser.ClearHostCookies) > 0 && cfg.BrowserInjectCookie() {
+		return Config{}, fmt.Errorf("site %q requires browser.inject_cookie: false when browser.clear_host_cookies is configured", cfg.ID)
+	}
 	return cfg, nil
 }
 
@@ -130,8 +138,8 @@ func MarshalYAML(cfg Config) ([]byte, error) {
 	if profile != (yamlProfile{}) {
 		out.Profile = &profile
 	}
-	browser := yamlBrowser{IdleTimeout: cfg.Browser.IdleTimeout, MaxLifetime: cfg.Browser.MaxLifetime, EntryText: cfg.Browser.EntryText}
-	if browser != (yamlBrowser{}) {
+	browser := yamlBrowser{IdleTimeout: cfg.Browser.IdleTimeout, MaxLifetime: cfg.Browser.MaxLifetime, EntryText: cfg.Browser.EntryText, InjectCookie: cfg.Browser.InjectCookie, ClearHostCookies: cfg.Browser.ClearHostCookies}
+	if browser.IdleTimeout != "" || browser.MaxLifetime != "" || browser.EntryText != "" || browser.InjectCookie != nil || len(browser.ClearHostCookies) > 0 {
 		out.Browser = &browser
 	}
 	auth := yamlAuth{
@@ -172,9 +180,11 @@ type yamlConfig struct {
 }
 
 type yamlBrowser struct {
-	IdleTimeout string `yaml:"idle_timeout,omitempty"`
-	MaxLifetime string `yaml:"max_lifetime,omitempty"`
-	EntryText   string `yaml:"entry_text,omitempty"`
+	IdleTimeout      string   `yaml:"idle_timeout,omitempty"`
+	MaxLifetime      string   `yaml:"max_lifetime,omitempty"`
+	EntryText        string   `yaml:"entry_text,omitempty"`
+	InjectCookie     *bool    `yaml:"inject_cookie,omitempty"`
+	ClearHostCookies []string `yaml:"clear_host_cookies,omitempty"`
 }
 
 type yamlCookie struct {

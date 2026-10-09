@@ -187,11 +187,13 @@ func TestMarshalYAMLOmitsEmptyGroups(t *testing.T) {
 }
 
 func TestMarshalYAMLKeepsAuthAndToken(t *testing.T) {
+	injectCookie := false
 	cfg := Config{
 		ID:       "authz",
 		BaseURL:  "https://api.example.com",
 		LoginURL: "https://example.com/login",
 		Cookie:   CookieConfig{Magic: "AUTHZENC\x01", Env: "AUTHZ_COOKIE"},
+		Browser:  BrowserConfig{InjectCookie: &injectCookie, ClearHostCookies: []string{"sessionid", "sid_tt"}},
 		Auth: AuthConfig{
 			Transport: "browser",
 			Method:    "POST",
@@ -212,6 +214,12 @@ func TestMarshalYAMLKeepsAuthAndToken(t *testing.T) {
 	}
 	if back.LoginURL != "https://example.com/login" {
 		t.Fatalf("absolute login_url lost: %q", back.LoginURL)
+	}
+	if back.Browser.InjectCookie == nil || *back.Browser.InjectCookie {
+		t.Fatalf("browser.inject_cookie=false was not preserved: %+v", back.Browser)
+	}
+	if strings.Join(back.Browser.ClearHostCookies, ",") != "sessionid,sid_tt" {
+		t.Fatalf("browser.clear_host_cookies was not preserved: %+v", back.Browser)
 	}
 }
 

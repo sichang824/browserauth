@@ -59,6 +59,17 @@ func TestBrowserConfigDefaults(t *testing.T) {
 	if cfg.BrowserIdleTimeout() != 0 || cfg.BrowserMaxLifetime() != 0 {
 		t.Fatalf("unexpected defaults: idle=%s lifetime=%s", cfg.BrowserIdleTimeout(), cfg.BrowserMaxLifetime())
 	}
+	if !cfg.BrowserInjectCookie() {
+		t.Fatal("saved cookie injection should default to enabled")
+	}
+}
+
+func TestBrowserConfigCanDisableCookieInjection(t *testing.T) {
+	disabled := false
+	cfg := Config{Browser: BrowserConfig{InjectCookie: &disabled}}
+	if cfg.BrowserInjectCookie() {
+		t.Fatal("saved cookie injection should be disabled")
+	}
 }
 
 func TestParseConfigRejectsInvalidBrowserConfig(t *testing.T) {
@@ -67,5 +78,19 @@ func TestParseConfigRejectsInvalidBrowserConfig(t *testing.T) {
 		if _, err := parseConfig([]byte(base + suffix)); err == nil || !strings.Contains(err.Error(), "browser.") {
 			t.Fatalf("expected browser config error for %q, got %v", suffix, err)
 		}
+	}
+}
+
+func TestParseConfigRejectsEmptyHostCookieCleanupName(t *testing.T) {
+	data := "id: bad\nbase_url: https://example.com\ncookie:\n  magic: BADENC\\x01\nbrowser:\n  inject_cookie: false\n  clear_host_cookies: [sessionid, '']\n"
+	if _, err := parseConfig([]byte(data)); err == nil || !strings.Contains(err.Error(), "browser.clear_host_cookies") {
+		t.Fatalf("expected host cookie cleanup config error, got %v", err)
+	}
+}
+
+func TestParseConfigRequiresInjectionDisabledForHostCookieCleanup(t *testing.T) {
+	data := "id: bad\nbase_url: https://example.com\ncookie:\n  magic: BADENC\\x01\nbrowser:\n  clear_host_cookies: [sessionid]\n"
+	if _, err := parseConfig([]byte(data)); err == nil || !strings.Contains(err.Error(), "inject_cookie: false") {
+		t.Fatalf("expected cookie injection conflict error, got %v", err)
 	}
 }

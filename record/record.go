@@ -13,7 +13,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
 	"skills-browserauth/chromebrowser"
@@ -114,7 +113,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	// Stop triggers: button (via listener), Ctrl+C, window close. Signals stay on
 	// their own channel so finalize controls when the browser context dies.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, stopSignals()...)
 	defer signal.Stop(sigCh)
 
 	go func() {

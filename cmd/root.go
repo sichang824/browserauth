@@ -15,9 +15,11 @@ Usage:
   browserauth <site> record [--isolated-profile] [url]   Record traffic to HAR
   browserauth <site> auth
   browserauth <site> auth set [COOKIE]
-  browserauth <site> request [--keep-open] <METHOD> <PATH> [BODY]
-  browserauth <site> request [--keep-open] --requests [JSON_ARRAY]
-  browserauth <site> session start|status|stop
+  browserauth <site> request [--keep-open] [--observe] <METHOD> <PATH> [BODY]
+  browserauth <site> request [--keep-open] [--observe] --requests [JSON_ARRAY]
+  browserauth <site> session start [--observe]|status|stop
+  browserauth <site> xhr status|list|get|wait|clear
+  browserauth <site> page reload|scroll
   browserauth <site> cookie          Print resolved cookie (for shell scripts)
   browserauth help
 
@@ -47,7 +49,7 @@ Per-site env (optional overrides):
 
 Examples:
   export BROWSERAUTH_COOKIE_KEY='your-passphrase'
-  browserauth sites add jira --from-file references/sites/jira.yaml
+  browserauth sites add myapp --from-file ./myapp.yaml
   browserauth sites list
   browserauth tingwu login
   browserauth tingwu auth

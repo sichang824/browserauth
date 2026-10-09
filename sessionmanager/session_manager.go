@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
 	"skills-browserauth/site"
@@ -18,12 +17,20 @@ import (
 )
 
 type Request struct {
-	Action  string            `json:"action"`
-	Site    string            `json:"site,omitempty"`
-	Method  string            `json:"method,omitempty"`
-	Path    string            `json:"path,omitempty"`
-	Body    string            `json:"body,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
+	Action        string            `json:"action"`
+	Site          string            `json:"site,omitempty"`
+	Method        string            `json:"method,omitempty"`
+	Path          string            `json:"path,omitempty"`
+	Body          string            `json:"body,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	Observe       bool              `json:"observe,omitempty"`
+	Match         string            `json:"match,omitempty"`
+	ID            string            `json:"id,omitempty"`
+	Limit         int               `json:"limit,omitempty"`
+	AfterSequence int64             `json:"after_sequence,omitempty"`
+	TimeoutMS     int64             `json:"timeout_ms,omitempty"`
+	Times         int               `json:"times,omitempty"`
+	DeltaY        float64           `json:"delta_y,omitempty"`
 }
 
 type SessionInfo struct {
@@ -86,6 +93,16 @@ func (s *Server) get(siteID string) (*managedSession, error) {
 	return managed, nil
 }
 
+func (s *Server) existing(siteID string) (*managedSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	managed := s.sessions[siteID]
+	if managed == nil || !managed.browser.Alive() {
+		return nil, fmt.Errorf("session not started: %s", siteID)
+	}
+	return managed, nil
+}
+
 func (s *Server) closeSite(siteID string) bool {
 	s.mu.Lock()
 	managed := s.sessions[siteID]
@@ -128,6 +145,14 @@ func (s *Server) Handle(req Request) Response {
 		if err != nil {
 			return Response{Error: err.Error()}
 		}
+		if req.Observe {
+			if err := managed.browser.EnableXHRObserver(); err != nil {
+				return Response{Error: err.Error()}
+			}
+			if err := managed.browser.Reload(); err != nil {
+				return Response{Error: err.Error()}
+			}
+		}
 		session, err := managed.browser.Authenticate()
 		if err != nil {
 			s.closeSite(req.Site)
@@ -139,11 +164,53 @@ func (s *Server) Handle(req Request) Response {
 		if err != nil {
 			return Response{Error: err.Error()}
 		}
+		if req.Observe {
+			if err := managed.browser.EnableXHRObserver(); err != nil {
+				return Response{Error: err.Error()}
+			}
+		}
 		body, status, err := managed.browser.Request(req.Method, req.Path, req.Body, req.Headers)
 		if err != nil {
 			return Response{Error: err.Error(), Status: status, Body: string(body)}
 		}
 		return Response{OK: true, Status: status, Body: string(body)}
+	case "xhr_status", "xhr_list", "xhr_get", "xhr_wait", "xhr_clear", "page_reload", "page_scroll":
+		managed, err := s.existing(req.Site)
+		if err != nil {
+			return Response{Error: err.Error()}
+		}
+		switch req.Action {
+		case "xhr_status":
+			return jsonResponse(managed.browser.XHRStatus())
+		case "xhr_list":
+			return jsonResponse(managed.browser.XHRList(req.Match, req.Limit))
+		case "xhr_get":
+			record, ok := managed.browser.XHRGet(req.ID)
+			if !ok {
+				return Response{Error: fmt.Sprintf("XHR record not found: %s", req.ID)}
+			}
+			return jsonResponse(record)
+		case "xhr_wait":
+			record, err := managed.browser.XHRWait(req.Match, req.AfterSequence, time.Duration(req.TimeoutMS)*time.Millisecond)
+			if err != nil {
+				return Response{Error: err.Error()}
+			}
+			return jsonResponse(record)
+		case "xhr_clear":
+			return jsonResponse(map[string]int{"cleared": managed.browser.XHRClear()})
+		case "page_reload":
+			if err := managed.browser.Reload(); err != nil {
+				return Response{Error: err.Error()}
+			}
+			return Response{OK: true}
+		case "page_scroll":
+			records, err := managed.browser.Scroll(req.Times, req.DeltaY, req.Match, time.Duration(req.TimeoutMS)*time.Millisecond)
+			if err != nil {
+				return Response{Error: err.Error()}
+			}
+			return jsonResponse(records)
+		}
+		return Response{Error: fmt.Sprintf("unknown session action %q", req.Action)}
 	case "stop_session":
 		return Response{OK: true, Body: fmt.Sprintf("%t", s.closeSite(req.Site))}
 	case "shutdown":
@@ -152,6 +219,14 @@ func (s *Server) Handle(req Request) Response {
 	default:
 		return Response{Error: fmt.Sprintf("unknown session manager action %q", req.Action)}
 	}
+}
+
+func jsonResponse(value any) Response {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return Response{Error: err.Error()}
+	}
+	return Response{OK: true, Body: string(data)}
 }
 
 func (s *Server) reapExpired() {
@@ -266,7 +341,7 @@ func EnsureStarted() error {
 	}
 	defer logFile.Close()
 	command := exec.Command(executable, "_session_manager", "serve")
-	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	detachProcess(command)
 	command.Stdin = nil
 	command.Stdout = logFile
 	command.Stderr = logFile

@@ -21,7 +21,9 @@ One CLI for browser login, session verify, and cookie-authenticated HTTP — **n
 | `browserauth <site> auth set` | Store encrypted cookie manually |
 | `browserauth <site> request <METHOD> <PATH> [BODY]` | Authenticated HTTP |
 | `browserauth <site> request --requests '[…]'` | One or more requests over one browser session |
-| `browserauth <site> session start\|status\|stop` | Manage one site's retained browser session |
+| `browserauth <site> session start [--observe]\|status\|stop` | Manage one site's retained browser session |
+| `browserauth <site> xhr status\|list\|get\|wait\|clear` | Inspect page-native XHR/Fetch captured by the session observer |
+| `browserauth <site> page reload\|scroll` | Trigger page behavior without replaying signed requests |
 | `browserauth session status\|stop` | Inspect or close retained browser sessions |
 | `browserauth <site> record [url]` | Record tab traffic to HAR (stop via injected ⏹ button) |
 | `browserauth <site> cookie` | Print cookie for shell/`oapi --cookie` (do not log) |
@@ -85,7 +87,7 @@ Directory: **`~/.browserauth/sites/{id}.yaml`**
 ```bash
 browserauth sites init
 browserauth sites new myapp --base-url https://myapp.example.com   # create from flags
-browserauth sites add --from-file references/sites/jira.yaml jira  # install a YAML
+browserauth sites add --from-file ./myapp.yaml myapp  # install your own YAML
 browserauth sites list
 browserauth sites show jira
 browserauth sites remove myapp
@@ -107,6 +109,39 @@ do not close it. It remains available until the browser window is closed or
 business URLs must be same-origin paths. The configured read-only auth check may poll,
 but each business request is sent once and never retried.
 
+### Observe page-native XHR/Fetch
+
+Use observation when a site signs its own requests in JavaScript and direct replay is
+invalid. The observer belongs to the retained browser session, so one login can support
+many page actions and log queries until `session stop`:
+
+```bash
+browserauth douyin session start --observe
+browserauth douyin page reload
+browserauth douyin xhr list --match '/feed/' --limit 10
+browserauth douyin xhr get xhr-12
+browserauth douyin xhr get xhr-12 --response
+browserauth douyin xhr wait --match '/feed/' --after 12 --timeout 30s
+browserauth douyin page scroll --times 3 --wait-xhr '/feed/'
+browserauth douyin xhr clear
+browserauth douyin session stop
+```
+
+`request --keep-open --observe` can enable the same observer while making a
+browser-backed API call. `xhr` commands only inspect an existing retained session and
+never open a browser themselves. `page reload` and `page scroll` make the page create
+fresh signed requests; they do not replay captured URLs. Only XHR/Fetch metadata and
+bodies are retained: authorization headers and cookies are not collected. The in-memory
+log keeps at most 200 entries per session and response bodies are capped at 1 MiB.
+
+`browser.inject_cookie` controls whether the encrypted saved Cookie header is copied
+into a newly opened browser. It defaults to `true` for compatibility. Set it to
+`false` for sites such as Douyin whose QR login writes authoritative cookies into the
+persistent profile; this avoids stale host cookies conflicting with fresh domain cookies.
+For profiles already polluted by an older version, `browser.clear_host_cookies` accepts
+a list of exact cookie names to delete from the `base_url` host on every startup while
+leaving parent-domain and unrelated device cookies intact.
+
 Browser-backed business requests also appear in a fixed monitor panel at the top of
 the managed tab. The compact list shows method, path, HTTP status, and duration. Click
 a row to inspect its request/response body, or use **全屏** for the complete panel.
@@ -119,7 +154,7 @@ or a `tokens:` list when an API needs several derived headers (e.g. dify-console
 both `Authorization: Bearer` and `x-csrf-token`). `username_json_paths` /
 `identity_json_paths` support dotted paths with array indices (`workspaces.0.name`).
 
-Example YAML templates (not auto-installed): `browserauth/references/sites/`
+Site configs are local files under `~/.browserauth/sites/`; this repository does not bundle site templates.
 
 ### Add a site
 
@@ -144,27 +179,13 @@ browserauth sites add myapp --from-file ./myapp.yaml
 
 Cookie file: `~/.browserauth/cookies/myapp`
 
-## Built-in sites
+## Local site configurations
 
-| Site | Business | Auth |
-|------|----------|------|
-| authz | AuthZ Admin + API (`authz.zsclab.com` / `api.authz.zsclab.com`) | `browserauth authz …` → cookie `access_token` as Bearer; see [authz skill](../../.cursor/skills/authz/SKILL.md) |
-| tingwu | `scripts/transcribe.sh` + `oapi` | `browserauth tingwu ...` |
-| jira | `oapi call` + [jira/specs/jira.openapi.yaml](../jira/specs/jira.openapi.yaml) | `browserauth jira ...` |
-| chatgpt | [chatgpt skill](../chatgpt/SKILL.md) headed Chrome send | `browserauth chatgpt ...` |
-| dify-console | Dify console API (`yai.dhb168.com/console/api`); see [dify skill](../dify/SKILL.md) | `browserauth dify-console …` → `tokens:` sends Bearer + x-csrf-token |
-| xiaohongshu | 小红书：login 在 `www.xiaohongshu.com`，auth 用 creator 平台 galaxy API | 主站 API 需 x-s/x-t 签名无法裸 Cookie 调用；galaxy `/api/galaxy/user/info` 免签名且认 www 的 `web_session` |
-| etax | 自然人电子税务局 WEB 端扣缴 | `auth.transport: browser` 绕过严格 WAF；校验 `/web/zh/loginstatus/check` |
-| douyin | 抖音：login 在 `www.douyin.com/jingxuan` | auth 用 `/aweme/v1/web/user/profile/self/?aid=6383`（HAR 验证可裸 Cookie；feed 等接口仍常带 a_bogus） |
-
-Site YAML templates: `references/sites/` (includes `authz.yaml`, `chatgpt.yaml`, `dify-console.yaml`, `xiaohongshu.yaml`, `douyin.yaml`, `etax.yaml`).
-
-### AuthZ notes
-
-- Login UI and cookies: `https://authz.zsclab.com`
-- REST / OIDC issuer: `https://api.authz.zsclab.com`
-- `auth.token.cookie: access_token` → `Authorization: Bearer …`
-- Cookie capture uses both `base_url` and absolute `login_url` when they differ
+This repository does not bundle site-specific configurations. Create your own with
+`browserauth sites new`, or install an authorized YAML with `browserauth sites add`.
+Existing configurations remain under `~/.browserauth/sites/` and can be inspected
+with `browserauth sites list`, `browserauth sites show <id>`, and `browserauth sites path`.
+The `references/` directory contains only an empty `.gitkeep` placeholder.
 
 ## Env
 

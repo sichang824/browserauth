@@ -15,7 +15,7 @@ BrowserAuth 是一个用 Go 编写的浏览器登录与 Cookie 认证命令行�
 - 将受管理标签页的流量录制为 HAR，辅助理解和配置获授权站点。
 - 使用持久化浏览器配置；默认共享，也可按站点隔离。
 
-完整命令和配置说明见 [SKILL.md](SKILL.md)。站点模板位于 [references/sites](references/sites)，需检查并调整目标地址后安装，不会自动安装。
+完整命令和配置说明见 [SKILL.md](SKILL.md)。本仓库不附带具体站点配置；请自行创建配置，或从本机 `~/.browserauth/sites/` 管理已有配置。`references/` 仅保留空的 `.gitkeep` 占位文件。
 
 ## 安装
 

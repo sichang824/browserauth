@@ -25,9 +25,17 @@ type Config struct {
 
 // BrowserConfig controls how browser-backed requests reuse Chrome.
 type BrowserConfig struct {
-	IdleTimeout string `yaml:"idle_timeout"`
-	MaxLifetime string `yaml:"max_lifetime"`
-	EntryText   string `yaml:"entry_text"`
+	IdleTimeout      string   `yaml:"idle_timeout"`
+	MaxLifetime      string   `yaml:"max_lifetime"`
+	EntryText        string   `yaml:"entry_text"`
+	InjectCookie     *bool    `yaml:"inject_cookie"`
+	ClearHostCookies []string `yaml:"clear_host_cookies"`
+}
+
+// BrowserInjectCookie reports whether a saved Cookie header should be copied
+// into a newly opened browser. Omitted defaults to true for compatibility.
+func (c Config) BrowserInjectCookie() bool {
+	return c.Browser.InjectCookie == nil || *c.Browser.InjectCookie
 }
 
 func (c Config) BrowserIdleTimeout() time.Duration {

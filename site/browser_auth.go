@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"skills-browserauth/chromebrowser"
 	"skills-browserauth/store"
 
+	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -44,6 +46,7 @@ type BrowserSession struct {
 	createdAt     time.Time
 	lastUsed      time.Time
 	requestCount  int64
+	observer      *xhrObserver
 }
 
 // OpenBrowserSession starts one browser that remains alive until Close.
@@ -53,7 +56,7 @@ func (c Config) OpenBrowserSession(parent context.Context, cookieHeader string, 
 		return nil, err
 	}
 	now := time.Now()
-	return &BrowserSession{cfg: c, cookieHeader: cookieHeader, ctx: browserCtx, cleanup: cleanup, createdAt: now, lastUsed: now}, nil
+	return &BrowserSession{cfg: c, cookieHeader: cookieHeader, ctx: browserCtx, cleanup: cleanup, createdAt: now, lastUsed: now, observer: newXHRObserver(browserCtx)}, nil
 }
 
 func (s *BrowserSession) authenticateLocked() (Session, error) {
@@ -100,7 +103,12 @@ func (s *BrowserSession) Request(method, path, body string, extraHeaders map[str
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, browserRequestTimeout)
 	defer cancel()
-	result, err := browserFetch(ctx, strings.ToUpper(method), s.cfg.ResolvedBaseURL()+path, headers, body, true)
+	requestMethod := strings.ToUpper(method)
+	requestURL := s.cfg.ResolvedBaseURL() + path
+	if s.observer != nil {
+		s.observer.markBrowserauth(requestMethod, requestURL)
+	}
+	result, err := browserFetch(ctx, requestMethod, requestURL, headers, body, true)
 	s.lastUsed = time.Now()
 	s.requestCount++
 	if err != nil {
@@ -111,6 +119,84 @@ func (s *BrowserSession) Request(method, path, body string, extraHeaders map[str
 		return data, result.Status, fmt.Errorf("API failed: %s %s (HTTP %d)", method, path, result.Status)
 	}
 	return data, result.Status, nil
+}
+
+// EnableXHRObserver starts session-scoped capture of page-native XHR and Fetch
+// traffic. It is idempotent and never captures request or response headers.
+func (s *BrowserSession) EnableXHRObserver() error {
+	if s.observer == nil {
+		return fmt.Errorf("XHR observer is unavailable")
+	}
+	return s.observer.enable()
+}
+
+func (s *BrowserSession) XHRStatus() XHRStatus { return s.observer.status() }
+
+func (s *BrowserSession) XHRList(match string, limit int) []XHRRecord {
+	return s.observer.list(match, limit)
+}
+
+func (s *BrowserSession) XHRGet(id string) (XHRRecord, bool) { return s.observer.get(id) }
+
+func (s *BrowserSession) XHRClear() int { return s.observer.clear() }
+
+func (s *BrowserSession) XHRWait(match string, after int64, timeout time.Duration) (XHRRecord, error) {
+	return s.observer.wait(match, after, timeout)
+}
+
+// Reload reloads the active business page in the retained browser.
+func (s *BrowserSession) Reload() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("browser session is closed")
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, browserRequestTimeout)
+	defer cancel()
+	if err := chromedp.Run(ctx, chromedp.Reload(), chromedp.Sleep(500*time.Millisecond)); err != nil {
+		return err
+	}
+	s.lastUsed = time.Now()
+	return nil
+}
+
+// Scroll sends real wheel input to the active page and optionally waits for a
+// new matching XHR after the requested wheel events. The page itself creates
+// every observed request.
+func (s *BrowserSession) Scroll(times int, delta float64, waitMatch string, timeout time.Duration) ([]XHRRecord, error) {
+	if times <= 0 {
+		times = 1
+	}
+	if delta == 0 {
+		delta = 800
+	}
+	result := make([]XHRRecord, 0, 1)
+	after := s.XHRStatus().LatestSequence
+	for i := 0; i < times; i++ {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return result, fmt.Errorf("browser session is closed")
+		}
+		ctx, cancel := context.WithTimeout(s.ctx, browserRequestTimeout)
+		err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			return input.DispatchMouseEvent(input.MouseWheel, 500, 500).WithDeltaY(delta).Do(ctx)
+		}), chromedp.Sleep(500*time.Millisecond))
+		cancel()
+		s.lastUsed = time.Now()
+		s.mu.Unlock()
+		if err != nil {
+			return result, err
+		}
+	}
+	if strings.TrimSpace(waitMatch) != "" {
+		record, err := s.XHRWait(waitMatch, after, timeout)
+		if err != nil {
+			return result, err
+		}
+		result = append(result, record)
+	}
+	return result, nil
 }
 
 func validateBrowserPath(path string) error {
@@ -217,9 +303,14 @@ func (c Config) prepareBrowser(parent context.Context, cookieHeader string, isol
 		if err := network.Enable().Do(ctx); err != nil {
 			return err
 		}
-		for _, pair := range parseCookieHeader(cookieHeader) {
-			if err := network.SetCookie(pair.name, pair.value).WithURL(c.ResolvedBaseURL()).Do(ctx); err != nil {
-				return fmt.Errorf("set cookie %s: %w", pair.name, err)
+		if err := c.clearConfiguredHostCookies(ctx); err != nil {
+			return err
+		}
+		if c.BrowserInjectCookie() {
+			for _, pair := range parseCookieHeader(cookieHeader) {
+				if err := network.SetCookie(pair.name, pair.value).WithURL(c.ResolvedBaseURL()).Do(ctx); err != nil {
+					return fmt.Errorf("set cookie %s: %w", pair.name, err)
+				}
 			}
 		}
 		return nil
@@ -255,7 +346,29 @@ func (c Config) prepareBrowser(parent context.Context, cookieHeader string, isol
 			browserCtx = activeCtx
 		}
 	}
+	if len(c.Browser.ClearHostCookies) > 0 {
+		if err := chromedp.Run(browserCtx, chromedp.ActionFunc(c.clearConfiguredHostCookies)); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("clear restored browser cookies: %w", err)
+		}
+	}
 	return browserCtx, cleanup, nil
+}
+
+func (c Config) clearConfiguredHostCookies(ctx context.Context) error {
+	if len(c.Browser.ClearHostCookies) == 0 {
+		return nil
+	}
+	baseURL, err := url.Parse(c.ResolvedBaseURL())
+	if err != nil || baseURL.Hostname() == "" {
+		return fmt.Errorf("resolve browser cookie cleanup host from %q", c.ResolvedBaseURL())
+	}
+	for _, name := range c.Browser.ClearHostCookies {
+		if err := network.DeleteCookies(strings.TrimSpace(name)).WithDomain(baseURL.Hostname()).WithPath("/").Do(ctx); err != nil {
+			return fmt.Errorf("clear host cookie %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 type browserPoint struct {
