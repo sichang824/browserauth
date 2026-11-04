@@ -21,19 +21,21 @@ type AuthHeaderBuilder func(cookieHeader string) map[string]string
 
 // Client performs cookie-authenticated HTTP requests for a web app.
 type Client struct {
-	BaseURL     string
-	Cookie      string
-	AuthHeaders AuthHeaderBuilder
-	NoFail      bool
-	httpClient  *http.Client
+	BaseURL             string
+	Cookie              string
+	AuthHeaders         AuthHeaderBuilder
+	NoFail              bool
+	httpClient          *http.Client
+	networkCookieHeader func(string) string
 }
 
 // New builds a client from store config and optional no-fail env.
 type NewOptions struct {
-	BaseURL     string
-	Names       store.AppNames
-	AuthHeaders AuthHeaderBuilder
-	NoFailEnv   string
+	BaseURL             string
+	Names               store.AppNames
+	AuthHeaders         AuthHeaderBuilder
+	NoFailEnv           string
+	NetworkCookieHeader func(string) string
 }
 
 // NewDirect creates a Client with explicit base URL, cookie, and HTTP client.
@@ -58,23 +60,37 @@ func New(opts NewOptions) (*Client, error) {
 	if opts.NoFailEnv != "" && os.Getenv(opts.NoFailEnv) == "1" {
 		noFail = true
 	}
+	hc := &http.Client{Timeout: requestTimeout}
+	if opts.NetworkCookieHeader != nil {
+		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
 	return &Client{
-		BaseURL:     strings.TrimRight(opts.BaseURL, "/"),
-		Cookie:      cookieHeader,
-		AuthHeaders: opts.AuthHeaders,
-		NoFail:      noFail,
-		httpClient:  &http.Client{Timeout: requestTimeout},
+		BaseURL:             strings.TrimRight(opts.BaseURL, "/"),
+		Cookie:              cookieHeader,
+		AuthHeaders:         opts.AuthHeaders,
+		NoFail:              noFail,
+		httpClient:          hc,
+		networkCookieHeader: opts.NetworkCookieHeader,
 	}, nil
 }
 
 // Do sends an HTTP request with browser-like headers and session cookie.
 func (c *Client) Do(method, path string, body io.Reader, extraHeaders map[string]string) ([]byte, int, error) {
+	cookies := c.Cookie
+	if c.networkCookieHeader != nil {
+		if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+			return nil, 0, fmt.Errorf("request requires a same-origin path")
+		}
+		cookies = c.networkCookieHeader(cookies)
+	}
 	req, err := http.NewRequest(method, c.BaseURL+path, body)
 	if err != nil {
 		return nil, 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Cookie", c.Cookie)
+	if cookies != "" {
+		req.Header.Set("Cookie", cookies)
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; BrowserAuth-CLI/1.0)")
 	req.Header.Set("Referer", c.BaseURL+"/")
 	req.Header.Set("Origin", c.BaseURL)

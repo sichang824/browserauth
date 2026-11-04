@@ -108,7 +108,7 @@ func (s *BrowserSession) Request(method, path, body string, extraHeaders map[str
 	if s.observer != nil {
 		s.observer.markBrowserauth(requestMethod, requestURL)
 	}
-	result, err := browserFetch(ctx, requestMethod, requestURL, headers, body, true)
+	result, err := browserFetch(ctx, requestMethod, requestURL, headers, body, true, s.cfg.Auth.LocalStorage != nil)
 	s.lastUsed = time.Now()
 	s.requestCount++
 	if err != nil {
@@ -236,7 +236,7 @@ func (s *BrowserSession) Alive() bool {
 func (c Config) FetchConfiguredSession(ctx context.Context, cookieHeader string) (Session, error) {
 	switch c.Auth.Transport {
 	case "", "http":
-		return c.FetchSession(cookieHeader)
+		return c.fetchSessionHTTP(ctx, cookieHeader)
 	case "browser":
 		isolated := store.ResolveIsolatedProfile(c.StoreNames(), false)
 		return c.fetchSessionBrowser(ctx, cookieHeader, isolated)
@@ -307,7 +307,7 @@ func (c Config) prepareBrowser(parent context.Context, cookieHeader string, isol
 			return err
 		}
 		if c.BrowserInjectCookie() {
-			for _, pair := range parseCookieHeader(cookieHeader) {
+			for _, pair := range parseCookieHeader(c.Auth.LocalStorage.NetworkCookieHeader(cookieHeader)) {
 				if err := network.SetCookie(pair.name, pair.value).WithURL(c.ResolvedBaseURL()).Do(ctx); err != nil {
 					return fmt.Errorf("set cookie %s: %w", pair.name, err)
 				}
@@ -409,6 +409,10 @@ func waitAndClickBrowserEntry(browserCtx context.Context, entryText string) (tar
 }
 
 func (c Config) waitForBrowserSession(browserCtx context.Context, cookieHeader string) (Session, error) {
+	authURL, err := c.authURL(c.ResolvedBaseURL(), cookieHeader)
+	if err != nil {
+		return Session{}, err
+	}
 	method := strings.ToUpper(strings.TrimSpace(c.Auth.Method))
 	if method == "" {
 		method = "GET"
@@ -430,7 +434,7 @@ func (c Config) waitForBrowserSession(browserCtx context.Context, cookieHeader s
 	var lastStatus int
 	var lastErr error
 	for {
-		result, err := browserFetch(browserCtx, method, c.ResolvedBaseURL()+c.Auth.Path, headers, "")
+		result, err := browserFetch(browserCtx, method, authURL, headers, "", false, c.Auth.LocalStorage != nil)
 		if err == nil {
 			lastStatus = result.Status
 			if result.Status == okStatus {
@@ -469,6 +473,10 @@ func (c Config) waitForBrowserSession(browserCtx context.Context, cookieHeader s
 }
 
 func (c Config) validateBrowserSessionOnce(ctx context.Context, cookieHeader string) (Session, error) {
+	authURL, err := c.authURL(c.ResolvedBaseURL(), cookieHeader)
+	if err != nil {
+		return Session{}, err
+	}
 	method := strings.ToUpper(strings.TrimSpace(c.Auth.Method))
 	if method == "" {
 		method = "GET"
@@ -481,7 +489,7 @@ func (c Config) validateBrowserSessionOnce(ctx context.Context, cookieHeader str
 	for key, value := range c.Auth.authHeaders(cookieHeader) {
 		headers[key] = value
 	}
-	result, err := browserFetch(ctx, method, c.ResolvedBaseURL()+c.Auth.Path, headers, "")
+	result, err := browserFetch(ctx, method, authURL, headers, "", false, c.Auth.LocalStorage != nil)
 	if err != nil {
 		return Session{}, err
 	}
@@ -505,7 +513,7 @@ func (c Config) validateBrowserSessionOnce(ctx context.Context, cookieHeader str
 	return session, nil
 }
 
-func browserFetch(ctx context.Context, method, url string, headers map[string]string, body string, showInPanel ...bool) (browserFetchResult, error) {
+func browserFetch(ctx context.Context, method, url string, headers map[string]string, body string, showInPanel, sameOrigin bool) (browserFetchResult, error) {
 	urlJSON, _ := json.Marshal(url)
 	methodJSON, _ := json.Marshal(method)
 	headersJSON, _ := json.Marshal(headers)
@@ -515,15 +523,25 @@ func browserFetch(ctx context.Context, method, url string, headers map[string]st
 		bodyJSON = string(encoded)
 	}
 	panelStart := "null"
-	if len(showInPanel) > 0 && showInPanel[0] {
+	if showInPanel {
 		panelStart = fmt.Sprintf(`(() => { try { return window.__browserauthPanel && window.__browserauthPanel.start({method:%s,url:%s,body:%s}); } catch (_) { return null; } })()`, methodJSON, urlJSON, bodyJSON)
+	}
+	redirect := "follow"
+	if sameOrigin {
+		redirect = "error"
 	}
 	expression := fmt.Sprintf(`(async () => {
   const panelRequestId = %s;
   try {
-    const response = await fetch(%s, {
+    const url = %s;
+    const redirect = %q;
+    if (redirect === "error" && new URL(url).origin !== location.origin) {
+      return {status: 0, body: "waiting for the configured site origin"};
+    }
+    const response = await fetch(url, {
       method: %s,
       credentials: "include",
+      redirect,
       headers: %s,
       body: %s
     });
@@ -535,7 +553,7 @@ func browserFetch(ctx context.Context, method, url string, headers map[string]st
     try { if (panelRequestId && window.__browserauthPanel) window.__browserauthPanel.finish(panelRequestId, {status: 0, body: "", error: message}); } catch (_) {}
     return {status: 0, body: message};
   }
-})()`, panelStart, urlJSON, methodJSON, headersJSON, bodyJSON)
+})()`, panelStart, urlJSON, redirect, methodJSON, headersJSON, bodyJSON)
 	var result browserFetchResult
 	err := chromedp.Run(ctx, chromedp.Evaluate(expression, &result, func(params *runtime.EvaluateParams) *runtime.EvaluateParams {
 		return params.WithAwaitPromise(true)

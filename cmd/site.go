@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -43,8 +44,7 @@ func RunSite(args []string) int {
 
 	switch sub {
 	case "login":
-		rest, isolated := parseIsolatedProfileFlag(rest)
-		return siteLogin(cfg, isolated, rest)
+		return siteLogin(cfg, rest)
 	case "browser":
 		rest, isolated := parseIsolatedProfileFlag(rest)
 		return siteBrowser(cfg, isolated, rest)
@@ -73,24 +73,43 @@ func RunSite(args []string) int {
 	}
 }
 
-func siteLogin(cfg site.Config, isolated bool, _ []string) int {
+func siteLogin(cfg site.Config, args []string) int {
+	flags := flag.NewFlagSet("login", flag.ContinueOnError)
+	isolated := flags.Bool("isolated-profile", false, "use a dedicated site profile")
+	timeout := flags.Duration("timeout", 5*time.Minute, "maximum time to wait for login")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if flags.NArg() != 0 || *timeout <= 0 {
+		fmt.Fprintln(os.Stderr, "Usage: browserauth <site> login [--isolated-profile] [--timeout DURATION]")
+		return 2
+	}
+
 	passphrase, err := cfg.Passphrase()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 
-	loginCfg := cfg.LoginConfig(isolated)
+	signalCtx, stop := signal.NotifyContext(context.Background(), stopSignals()...)
+	defer stop()
+	ctx, cancel := context.WithTimeout(signalCtx, *timeout)
+	defer cancel()
+
+	loginCfg := cfg.LoginConfig(*isolated)
 	chromePath := chromebrowser.ChromeExecutable(loginCfg.ChromePathEnv)
 	if chromePath == "" {
 		chromePath = "(chromedp default Chromium)"
 	}
-	fmt.Fprintf(os.Stderr, "浏览器已打开：%s\n", loginCfg.LoginURL)
+	fmt.Fprintf(os.Stderr, "正在打开浏览器：%s\n", loginCfg.LoginURL)
 	fmt.Fprintf(os.Stderr, "Chrome: %s\n", chromePath)
 	fmt.Fprintf(os.Stderr, "Profile: %s\n", store.ProfileDirPath(cfg.StoreNames(), loginCfg.IsolatedProfile))
-	fmt.Fprintf(os.Stderr, "请在打开的页面完成登录；检测到有效会话后会自动保存 Cookie 并关闭浏览器。\n")
+	fmt.Fprintf(os.Stderr, "请在打开的页面完成登录；检测到有效会话后会自动保存会话并关闭浏览器。\n")
 
-	res, err := login.Capture(context.Background(), loginCfg, passphrase)
+	res, err := login.Capture(ctx, loginCfg, passphrase)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "登录流程已取消。")
@@ -100,8 +119,12 @@ func siteLogin(cfg site.Config, isolated bool, _ []string) int {
 		return 2
 	}
 
-	fmt.Printf("已自动捕获 %d 个 Cookie，当前用户 %s\n", res.CookieCount, res.Username)
-	fmt.Printf("Cookie 已加密保存至 %s\n", res.CookiePath)
+	if cfg.Auth.LocalStorage != nil {
+		fmt.Printf("已验证浏览器会话，当前用户 %s\n", res.Username)
+	} else {
+		fmt.Printf("已自动捕获 %d 个 Cookie，当前用户 %s\n", res.CookieCount, res.Username)
+	}
+	fmt.Printf("会话已加密保存至 %s\n", res.CookiePath)
 	fmt.Printf("浏览器 profile 已持久化保存至 %s\n", res.ProfileDir)
 	return 0
 }
@@ -321,12 +344,16 @@ flagsDone:
 		body = strings.NewReader(bodyText)
 	}
 
-	client, err := httpclient.New(httpclient.NewOptions{
+	opts := httpclient.NewOptions{
 		BaseURL:     cfg.ResolvedBaseURL(),
 		Names:       cfg.StoreNames(),
 		AuthHeaders: cfg.Auth.AuthHeaders,
 		NoFailEnv:   cfg.NoFailEnv,
-	})
+	}
+	if cfg.Auth.LocalStorage != nil {
+		opts.NetworkCookieHeader = cfg.Auth.LocalStorage.NetworkCookieHeader
+	}
+	client, err := httpclient.New(opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2

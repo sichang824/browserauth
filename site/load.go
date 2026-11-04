@@ -92,6 +92,11 @@ func parseConfig(data []byte) (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("site %q has unsupported auth.transport %q", cfg.ID, cfg.Auth.Transport)
 	}
+	if cfg.Auth.LocalStorage != nil {
+		if err := cfg.validateLocalStorage(); err != nil {
+			return Config{}, err
+		}
+	}
 	for name, value := range map[string]string{"idle_timeout": cfg.Browser.IdleTimeout, "max_lifetime": cfg.Browser.MaxLifetime} {
 		if strings.TrimSpace(value) == "" {
 			continue
@@ -144,6 +149,7 @@ func MarshalYAML(cfg Config) ([]byte, error) {
 	}
 	auth := yamlAuth{
 		Transport:         cfg.Auth.Transport,
+		LocalStorage:      cfg.Auth.LocalStorage,
 		Method:            cfg.Auth.Method,
 		Path:              cfg.Auth.Path,
 		OKStatus:          cfg.Auth.OKStatus,
@@ -158,7 +164,7 @@ func MarshalYAML(cfg Config) ([]byte, error) {
 	for _, tk := range cfg.Auth.Tokens {
 		auth.Tokens = append(auth.Tokens, yamlToken{Cookie: tk.Cookie, Header: tk.Header, Prefix: tk.Prefix})
 	}
-	if auth.Transport != "" || auth.Method != "" || auth.Path != "" || auth.OKStatus != 0 || auth.Token != nil ||
+	if auth.Transport != "" || auth.Method != "" || auth.Path != "" || auth.OKStatus != 0 || auth.Token != nil || auth.LocalStorage != nil ||
 		len(auth.Tokens) > 0 || len(auth.UsernameJSONPaths) > 0 || len(auth.IdentityJSONPaths) > 0 ||
 		auth.UserIDJSONPath != "" || len(auth.UsernameForbidden) > 0 {
 		out.Auth = &auth
@@ -207,16 +213,17 @@ type yamlToken struct {
 }
 
 type yamlAuth struct {
-	Transport         string      `yaml:"transport,omitempty"`
-	Method            string      `yaml:"method,omitempty"`
-	Path              string      `yaml:"path,omitempty"`
-	OKStatus          int         `yaml:"ok_status,omitempty"`
-	Token             *yamlToken  `yaml:"token,omitempty"`
-	Tokens            []yamlToken `yaml:"tokens,omitempty"`
-	UsernameJSONPaths []string    `yaml:"username_json_paths,omitempty"`
-	IdentityJSONPaths []string    `yaml:"identity_json_paths,omitempty"`
-	UserIDJSONPath    string      `yaml:"user_id_json_path,omitempty"`
-	UsernameForbidden []string    `yaml:"username_forbidden,omitempty"`
+	Transport         string              `yaml:"transport,omitempty"`
+	Method            string              `yaml:"method,omitempty"`
+	Path              string              `yaml:"path,omitempty"`
+	OKStatus          int                 `yaml:"ok_status,omitempty"`
+	Token             *yamlToken          `yaml:"token,omitempty"`
+	Tokens            []yamlToken         `yaml:"tokens,omitempty"`
+	LocalStorage      *LocalStorageConfig `yaml:"local_storage,omitempty"`
+	UsernameJSONPaths []string            `yaml:"username_json_paths,omitempty"`
+	IdentityJSONPaths []string            `yaml:"identity_json_paths,omitempty"`
+	UserIDJSONPath    string              `yaml:"user_id_json_path,omitempty"`
+	UsernameForbidden []string            `yaml:"username_forbidden,omitempty"`
 }
 
 // WriteFile writes a site config to the sites directory.

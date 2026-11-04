@@ -8,9 +8,10 @@ import (
 const usage = `browserauth - cookie-auth CLI for any configured web site
 
 Usage:
-  browserauth sites list|path|show|init|add|remove
+  browserauth sites list|path|init|add|remove
+  browserauth sites show [--json] <id>
   browserauth session status|stop
-  browserauth <site> login [--isolated-profile]
+  browserauth <site> login [--isolated-profile] [--timeout DURATION]
   browserauth <site> browser [--isolated-profile]
   browserauth <site> record [--isolated-profile] [url]   Record traffic to HAR
   browserauth <site> auth

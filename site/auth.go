@@ -1,17 +1,23 @@
 package site
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // FetchSession validates cookies and returns session details.
 func (c Config) FetchSession(cookieHeader string) (Session, error) {
-	username, payload, err := c.validateHTTP(cookieHeader)
+	return c.fetchSessionHTTP(context.Background(), cookieHeader)
+}
+
+func (c Config) fetchSessionHTTP(ctx context.Context, cookieHeader string) (Session, error) {
+	username, payload, err := c.validateHTTPWithBase(ctx, c.ResolvedBaseURL(), cookieHeader)
 	if err != nil {
 		return Session{}, err
 	}
@@ -26,15 +32,15 @@ func (c Config) FetchSession(cookieHeader string) (Session, error) {
 
 // ValidateSession checks cookies using the site auth config.
 func (c Config) ValidateSession(baseURL, cookieHeader string) (string, error) {
-	username, _, err := c.validateHTTPWithBase(baseURL, cookieHeader)
+	return c.validateSessionContext(context.Background(), baseURL, cookieHeader)
+}
+
+func (c Config) validateSessionContext(ctx context.Context, baseURL, cookieHeader string) (string, error) {
+	username, _, err := c.validateHTTPWithBase(ctx, baseURL, cookieHeader)
 	return username, err
 }
 
-func (c Config) validateHTTP(cookieHeader string) (string, map[string]any, error) {
-	return c.validateHTTPWithBase(c.ResolvedBaseURL(), cookieHeader)
-}
-
-func (c Config) validateHTTPWithBase(baseURL, cookieHeader string) (string, map[string]any, error) {
+func (c Config) validateHTTPWithBase(ctx context.Context, baseURL, cookieHeader string) (string, map[string]any, error) {
 	if c.Auth.Path == "" {
 		return "", nil, fmt.Errorf("site %q has no auth.path configured", c.ID)
 	}
@@ -48,13 +54,20 @@ func (c Config) validateHTTPWithBase(baseURL, cookieHeader string) (string, map[
 		okStatus = http.StatusOK
 	}
 
-	url := baseURL + c.Auth.Path
-	req, err := http.NewRequest(method, url, nil)
+	target, err := c.authURL(baseURL, cookieHeader)
+	if err != nil {
+		return "", nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, target, nil)
 	if err != nil {
 		return "", nil, fmt.Errorf("build auth request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Cookie", cookieHeader)
+	if cookies := c.Auth.LocalStorage.NetworkCookieHeader(cookieHeader); cookies != "" {
+		req.Header.Set("Cookie", cookies)
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; BrowserAuth-CLI/1.0)")
 	req.Header.Set("Referer", baseURL+"/")
 	req.Header.Set("Origin", baseURL)
@@ -63,8 +76,15 @@ func (c Config) validateHTTPWithBase(baseURL, cookieHeader string) (string, map[
 		req.Header.Set(key, value)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := http.DefaultClient
+	if c.Auth.LocalStorage != nil {
+		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
+		if c.Auth.LocalStorage != nil {
+			return "", nil, fmt.Errorf("configured auth request failed")
+		}
 		return "", nil, fmt.Errorf("auth request failed: %w", err)
 	}
 	defer resp.Body.Close()

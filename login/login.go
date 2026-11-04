@@ -16,7 +16,7 @@ import (
 )
 
 // SessionValidator checks whether a cookie header represents an authenticated session.
-type SessionValidator func(baseURL, cookieHeader string) (username string, err error)
+type SessionValidator func(ctx context.Context, baseURL, cookieHeader string) (username string, err error)
 type BrowserSessionValidator func(ctx context.Context, cookieHeader string) (username string, err error)
 
 // Config drives browser login and cookie capture for one app.
@@ -28,6 +28,7 @@ type Config struct {
 	IsolatedProfile bool
 	Validate        SessionValidator
 	ValidateBrowser BrowserSessionValidator
+	CaptureFields   func(ctx context.Context, cookies string) (string, error)
 }
 
 // Result is returned after a successful login capture.
@@ -38,8 +39,11 @@ type Result struct {
 	CookieCount int
 }
 
-// Capture opens a browser, waits for a valid session, and writes encrypted cookie.
+// Capture opens a browser, waits for a valid session, and saves it encrypted.
 func Capture(ctx context.Context, cfg Config, passphrase string) (Result, error) {
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	if passphrase == "" {
 		return Result{}, errors.New("BROWSERAUTH_COOKIE_KEY must be set to store the cookie (encrypted)")
 	}
@@ -49,24 +53,35 @@ func Capture(ctx context.Context, cfg Config, passphrase string) (Result, error)
 		return Result{}, fmt.Errorf("prepare profile dir: %w", err)
 	}
 
-	opts := chromebrowser.ExecAllocatorOptions(profileDir, cfg.ChromePathEnv)
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	// Keep Chrome alive when the work context is cancelled so it can flush the
+	// persistent profile before the allocator terminates its process.
+	opts := append(chromebrowser.ExecAllocatorOptions(profileDir, cfg.ChromePathEnv), chromedp.WSURLReadTimeout(10*time.Second))
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.WithoutCancel(ctx), opts...)
 	defer allocCancel()
+	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	defer cancelBrowser()
+	defer func() {
+		if chromedp.FromContext(browserCtx).Browser != nil && browserCtx.Err() == nil {
+			closeCtx, cancel := context.WithTimeout(browserCtx, 5*time.Second)
+			defer cancel()
+			_ = chromedp.Cancel(closeCtx)
+		}
+	}()
 
-	browserCtx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
+	// The first Run starts the process with the lifetime of browserCtx.
 	if err := chromebrowser.InjectStealth(browserCtx); err != nil {
-		return Result{}, fmt.Errorf("prepare browser stealth: %w", err)
+		return Result{}, fmt.Errorf("prepare browser: %w", err)
 	}
+	workCtx, cancelWork := context.WithCancel(browserCtx)
+	defer cancelWork()
+	stop := context.AfterFunc(ctx, cancelWork)
+	defer stop()
 
-	if err := chromedp.Run(browserCtx, network.Enable()); err != nil {
+	if err := chromedp.Run(workCtx, network.Enable()); err != nil {
 		return Result{}, fmt.Errorf("enable network events: %w", err)
 	}
 
 	triggerCh := make(chan struct{}, 1)
-	resultCh := make(chan Result, 1)
-	errCh := make(chan error, 1)
 
 	chromedp.ListenTarget(browserCtx, func(ev interface{}) {
 		switch ev.(type) {
@@ -78,121 +93,98 @@ func Capture(ctx context.Context, cfg Config, passphrase string) (Result, error)
 		}
 	})
 
-	go watchCapture(browserCtx, cfg, passphrase, profileDir, triggerCh, resultCh, errCh)
-
-	if err := chromedp.Run(browserCtx, chromedp.Navigate(cfg.LoginURL)); err != nil {
+	if err := chromedp.Run(workCtx, chromedp.Navigate(cfg.LoginURL)); err != nil {
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
 		return Result{}, fmt.Errorf("open browser: %w", err)
 	}
 
-	select {
-	case res := <-resultCh:
-		allocCancel()
-		return res, nil
-	case err := <-errCh:
-		if errors.Is(err, context.Canceled) {
-			return Result{}, err
-		}
-		return Result{}, err
-	case <-ctx.Done():
-		return Result{}, ctx.Err()
-	}
-}
-
-// RefreshFromBrowser reads cookies from an open browser context and persists if valid.
-func RefreshFromBrowser(ctx context.Context, cfg Config, passphrase string) (Result, bool, error) {
-	profileDir := store.ProfileDirPath(cfg.Names, cfg.IsolatedProfile)
-	return tryPersist(ctx, cfg, passphrase, profileDir)
-}
-
-func watchCapture(ctx context.Context, cfg Config, passphrase, profileDir string, triggerCh <-chan struct{}, resultCh chan<- Result, errCh chan<- error) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-
 	for {
+		res, waiting, err := tryPersist(workCtx, cfg, passphrase, profileDir)
+		if err != nil {
+			return Result{}, err
+		}
+		if waiting == nil {
+			return res, nil
+		}
 		select {
 		case <-ctx.Done():
-			return
-		case <-ticker.C:
+			return Result{}, fmt.Errorf("%w (%v)", ctx.Err(), waiting)
+		case <-browserCtx.Done():
+			return Result{}, fmt.Errorf("browser closed while waiting for login (%v)", waiting)
 		case <-triggerCh:
+		case <-ticker.C:
 		}
-
-		res, ok, err := tryPersist(ctx, cfg, passphrase, profileDir)
-		if err != nil {
-			select {
-			case errCh <- err:
-			default:
-			}
-			return
-		}
-		if !ok {
-			continue
-		}
-		select {
-		case resultCh <- res:
-		default:
-		}
-		return
 	}
 }
 
-func tryPersist(ctx context.Context, cfg Config, passphrase, profileDir string) (Result, bool, error) {
-	var cookies []*network.Cookie
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		urls := []string{cfg.BaseURL}
-		// Web login host may differ from API base (e.g. authz.zsclab.com vs api.authz.zsclab.com).
-		if cfg.LoginURL != "" && !strings.HasPrefix(cfg.LoginURL, cfg.BaseURL) {
-			urls = append(urls, cfg.LoginURL)
-		}
-		var getErr error
-		cookies, getErr = network.GetCookies().WithURLs(urls).Do(ctx)
-		return getErr
-	}))
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return Result{}, false, err
-		}
-		return Result{}, false, nil
-	}
-	if len(cookies) == 0 {
-		return Result{}, false, nil
-	}
+// RefreshFromBrowser reads the session from an open browser and persists it if valid.
+func RefreshFromBrowser(ctx context.Context, cfg Config, passphrase string) (Result, bool, error) {
+	profileDir := store.ProfileDirPath(cfg.Names, cfg.IsolatedProfile)
+	res, waiting, err := tryPersist(ctx, cfg, passphrase, profileDir)
+	return res, err == nil && waiting == nil, err
+}
 
+// tryPersist separates retryable capture and auth failures from a failed write.
+func tryPersist(ctx context.Context, cfg Config, passphrase, profileDir string) (result Result, waiting error, err error) {
+	if ctx.Err() != nil {
+		return Result{}, ctx.Err(), nil
+	}
+	cookies, err := getBrowserCookies(ctx, cfg)
+	if err != nil {
+		return Result{}, errors.New("waiting to read browser cookies"), nil
+	}
 	cookieLine := formatCookies(cookies)
+	if cfg.CaptureFields != nil {
+		cookieLine, err = cfg.CaptureFields(ctx, cookieLine)
+		if err != nil {
+			return Result{}, err, nil
+		}
+	}
+	if cookieLine == "" {
+		return Result{}, errors.New("waiting for browser cookies"), nil
+	}
 	var username string
 	if cfg.ValidateBrowser != nil {
 		username, err = cfg.ValidateBrowser(ctx, cookieLine)
 	} else {
-		username, err = cfg.Validate(cfg.BaseURL, cookieLine)
+		username, err = cfg.Validate(ctx, cfg.BaseURL, cookieLine)
 	}
 	if err != nil {
-		return Result{}, false, nil
+		return Result{}, err, nil
 	}
-	if cfg.ValidateBrowser != nil {
+	if cfg.ValidateBrowser != nil && cfg.CaptureFields == nil {
 		cookies, err = getBrowserCookies(ctx, cfg)
 		if err != nil || len(cookies) == 0 {
-			return Result{}, false, nil
+			return Result{}, errors.New("waiting for validated browser cookies"), nil
 		}
 		cookieLine = formatCookies(cookies)
+	}
+	if ctx.Err() != nil {
+		return Result{}, ctx.Err(), nil
 	}
 
 	cookiePath, err := store.WriteEncryptedCookie(cfg.Names, cookieLine, passphrase)
 	if err != nil {
-		return Result{}, false, err
+		return Result{}, nil, err
 	}
-
 	return Result{
 		Username:    username,
 		CookiePath:  cookiePath,
 		ProfileDir:  profileDir,
 		CookieCount: len(cookies),
-	}, true, nil
+	}, nil, nil
 }
 
 func getBrowserCookies(ctx context.Context, cfg Config) ([]*network.Cookie, error) {
 	var cookies []*network.Cookie
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		urls := []string{cfg.BaseURL}
-		if cfg.LoginURL != "" && !strings.HasPrefix(cfg.LoginURL, cfg.BaseURL) {
+		// Keep legacy cookie-only sites that authenticate through a different host.
+		if cfg.CaptureFields == nil && cfg.LoginURL != "" && !strings.HasPrefix(cfg.LoginURL, cfg.BaseURL) {
 			urls = append(urls, cfg.LoginURL)
 		}
 		var getErr error

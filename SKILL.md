@@ -1,21 +1,22 @@
 ---
 name: browserauth
 description: >-
-  Universal cookie-auth CLI for any web site. YAML site configs drive login,
-  browser profile, auth verify, and authenticated HTTP requests. Use for
-  browserauth tingwu login, browserauth jira auth, adding new sites without Go code.
+  Browser login and authenticated requests using site-configured cookies or
+  localStorage credentials. Use to establish, verify or reuse an encrypted
+  session, onboard a website, or inspect browser-backed API traffic.
 ---
 
-# BrowserAuth (universal cookie-auth CLI)
+# BrowserAuth
 
-One CLI for browser login, session verify, and cookie-authenticated HTTP — **no per-site login code**.
+Site YAML controls how BrowserAuth captures, verifies and reuses encrypted browser sessions.
 
 ## Commands
 
 | Command | Purpose |
 |---------|---------|
 | `browserauth sites list` | List configured sites |
-| `browserauth <site> login` | Browser login → encrypt cookie |
+| `browserauth sites show --json <site>` | Read stored site configuration as JSON |
+| `browserauth <site> login [--timeout DURATION]` | Validate and encrypt a browser session (default wait 5m) |
 | `browserauth <site> browser` | Persistent Chrome (extensions OK) |
 | `browserauth <site> auth` | Verify session |
 | `browserauth <site> auth set` | Store encrypted cookie manually |
@@ -29,6 +30,10 @@ One CLI for browser login, session verify, and cookie-authenticated HTTP — **n
 | `browserauth <site> cookie` | Print cookie for shell/`oapi --cookie` (do not log) |
 
 ## Setup (once)
+
+From the BrowserAuth source checkout, run `make install` to install the CLI
+under `~/.local/bin`. Ensure that directory is on `PATH`. If `sites show --json`
+is unavailable, rebuild and install the current source.
 
 ```bash
 # ~/.zshrc — one passphrase for all sites
@@ -90,12 +95,14 @@ browserauth sites new myapp --base-url https://myapp.example.com   # create from
 browserauth sites add --from-file ./myapp.yaml myapp  # install your own YAML
 browserauth sites list
 browserauth sites show jira
+browserauth sites show --json jira
 browserauth sites remove myapp
 browserauth sites path
 ```
 
-Flags go **before** the site id (Go `flag` stops at the first positional):
-`browserauth sites add --force --from-file <yaml> <id>`.
+Use `browserauth sites show --json <id>` when parsing configuration in scripts.
+The JSON reflects the stored YAML, including field names such as `base_url`.
+Set `sites add` flags before the site id.
 
 Site YAML `auth.transport` defaults to `http`; set it to `browser` for WAF-protected
 sites that require a real browser/TLS fingerprint. `request` accepts either the legacy
@@ -153,6 +160,16 @@ and double-clicking the title bar restores the default top-center position.
 or a `tokens:` list when an API needs several derived headers (e.g. dify-console sends
 both `Authorization: Bearer` and `x-csrf-token`). `username_json_paths` /
 `identity_json_paths` support dotted paths with array indices (`workspaces.0.name`).
+
+For apps that store credentials in same-origin `localStorage`, set
+`auth.local_storage.key` to the storage key and `fields` to a map of session
+aliases to JSON paths. Reference a token alias in `auth.token.cookie` and use
+`auth.local_storage.query` to populate auth-check query parameters from the
+current session. For a migration, update the site YAML, remove fixed values for
+the mapped parameters, and run `browserauth <site> login` again. After validation
+the CLI encrypts the session and closes its Chrome instance. Use `auth` to check
+that the saved session works. Treat the explicit `cookie` export as sensitive.
+See the [configuration example](README.md).
 
 Site configs are local files under `~/.browserauth/sites/`; this repository does not bundle site templates.
 

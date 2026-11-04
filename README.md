@@ -60,7 +60,30 @@ browserauth myapp request GET /api/me
 browserauth sites add --from-file ./myapp.yaml myapp
 browserauth sites list
 browserauth sites show myapp
+browserauth sites show --json myapp
 ```
+
+登录默认等待 5 分钟，可用 `browserauth myapp login --timeout 10m` 调整。验证通过、取消或超时后，CLI 会关闭本次启动的 Chrome，并保留 profile。
+
+如果站点将会话存入 `localStorage`，可在 YAML 中声明 JSON 字段的来源和用途。
+
+```yaml
+auth:
+  path: /api/me?scope=current
+  token:
+    cookie: session_token
+    header: Authorization
+  local_storage:
+    key: accountSession
+    fields:
+      session_token: credentials.token
+      session_account: account.id
+    query:
+      account: session_account
+  username_json_paths: [name]
+```
+
+页面须回到 `base_url` 的同源地址。每个 `fields` 条目将会话别名映射到 JSON 路径，支持非空、兼容 Cookie 值的字符串或数字。示例中的 token 使用默认的 `Bearer ` 前缀，`query` 用当前会话值填充鉴权参数。所有字段在鉴权通过后与浏览器 Cookie 一起加密保存。显式的 `cookie` 导出保留这些别名供现有脚本使用，发送 HTTP Cookie 时会过滤别名。
 
 对于需要浏览器环境的站点，将 YAML 中的 `auth.transport` 配置为 `browser`。此模式支持保留会话与页面流量观察：
 

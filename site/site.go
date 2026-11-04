@@ -66,16 +66,17 @@ type ProfileConfig struct {
 }
 
 type AuthConfig struct {
-	Transport         string        `yaml:"transport"`
-	Method            string        `yaml:"method"`
-	Path              string        `yaml:"path"`
-	OKStatus          int           `yaml:"ok_status"`
-	Token             *TokenConfig  `yaml:"token"`
-	Tokens            []TokenConfig `yaml:"tokens"`
-	UsernameJSONPaths []string      `yaml:"username_json_paths"`
-	IdentityJSONPaths []string      `yaml:"identity_json_paths"`
-	UserIDJSONPath    string        `yaml:"user_id_json_path"`
-	UsernameForbidden []string      `yaml:"username_forbidden"`
+	Transport         string              `yaml:"transport"`
+	Method            string              `yaml:"method"`
+	Path              string              `yaml:"path"`
+	OKStatus          int                 `yaml:"ok_status"`
+	Token             *TokenConfig        `yaml:"token"`
+	Tokens            []TokenConfig       `yaml:"tokens"`
+	LocalStorage      *LocalStorageConfig `yaml:"local_storage"`
+	UsernameJSONPaths []string            `yaml:"username_json_paths"`
+	IdentityJSONPaths []string            `yaml:"identity_json_paths"`
+	UserIDJSONPath    string              `yaml:"user_id_json_path"`
+	UsernameForbidden []string            `yaml:"username_forbidden"`
 }
 
 // Session holds validated session details.
@@ -134,7 +135,10 @@ func (c Config) LoginConfig(isolatedProfileFlag bool) login.Config {
 		Names:           names,
 		ChromePathEnv:   c.ChromePathEnv,
 		IsolatedProfile: store.ResolveIsolatedProfile(names, isolatedProfileFlag),
-		Validate:        c.ValidateSession,
+		Validate:        c.validateSessionContext,
+	}
+	if c.Auth.LocalStorage != nil {
+		cfg.CaptureFields = c.captureLocalStorage
 	}
 	if c.Auth.Transport == "browser" {
 		cfg.ValidateBrowser = func(ctx context.Context, cookieHeader string) (string, error) {

@@ -162,8 +162,21 @@ func WriteEncryptedCookie(names AppNames, rawCookie, passphrase string) (string,
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("prepare cookie directory: %w", err)
 	}
-	if err := os.WriteFile(path, blob, 0o600); err != nil {
-		return "", fmt.Errorf("write cookie file: %w", err)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".browserauth-session-*")
+	if err != nil {
+		return "", fmt.Errorf("create temporary cookie file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	_, writeErr := tmp.Write(blob)
+	closeErr := tmp.Close()
+	if writeErr != nil {
+		return "", fmt.Errorf("write cookie file: %w", writeErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("close cookie file: %w", closeErr)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return "", fmt.Errorf("replace cookie file: %w", err)
 	}
 	return path, nil
 }

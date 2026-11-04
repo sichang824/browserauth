@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -8,6 +9,8 @@ import (
 
 	"skills-browserauth/site"
 	"skills-browserauth/store"
+
+	"gopkg.in/yaml.v3"
 )
 
 const sitesUsage = `browserauth sites - manage site YAML configs
@@ -15,7 +18,7 @@ const sitesUsage = `browserauth sites - manage site YAML configs
 Usage:
   browserauth sites list
   browserauth sites path
-  browserauth sites show <id>
+  browserauth sites show [--json] <id>
   browserauth sites init
   browserauth sites new <name> [options]          Create a site from flags
   browserauth sites add <id> --from-file PATH [--force]
@@ -92,14 +95,38 @@ func listSites() int {
 }
 
 func showSite(args []string) int {
+	asJSON := false
+	if len(args) == 2 && args[1] == "--json" {
+		args = []string{"--json", args[0]}
+	}
+	if len(args) > 0 && args[0] == "--json" {
+		asJSON = true
+		args = args[1:]
+	}
 	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: browserauth sites show <id>")
+		fmt.Fprintln(os.Stderr, "Usage: browserauth sites show [--json] <id>")
 		return 2
 	}
 	data, err := site.ReadRaw(args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
+	}
+	if asJSON {
+		var document map[string]any
+		if err := yaml.Unmarshal(data, &document); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		if document == nil {
+			fmt.Fprintln(os.Stderr, "site YAML must contain a configuration object")
+			return 2
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(document); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		return 0
 	}
 	fmt.Print(string(data))
 	if len(data) > 0 && data[len(data)-1] != '\n' {
