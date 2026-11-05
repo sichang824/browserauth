@@ -11,9 +11,11 @@ Usage:
   browserauth sites list|path|init|add|remove
   browserauth sites show [--json] <id>
   browserauth session status|stop
+  browserauth openapi --input recording.har [--output NEW_DIR] [--config rules.yaml]
   browserauth <site> login [--isolated-profile] [--timeout DURATION]
   browserauth <site> browser [--isolated-profile]
   browserauth <site> record [--isolated-profile] [url]   Record traffic to HAR
+  browserauth <site> openapi [--input recording.har] [--output NEW_DIR] [--config rules.yaml]
   browserauth <site> auth
   browserauth <site> auth set [COOKIE]
   browserauth <site> request [--keep-open] [--observe] <METHOD> <PATH> [BODY]
@@ -74,6 +76,8 @@ func Run(args []string) int {
 		return Sites(args[1:])
 	case "session":
 		return SessionManager(args[1:])
+	case "openapi":
+		return OpenAPI("", args[1:])
 	case "_session_manager":
 		return internalSessionManager(args[1:])
 	default:

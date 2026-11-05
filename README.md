@@ -13,6 +13,7 @@ BrowserAuth 是一个用 Go 编写的浏览器登录与 Cookie 认证命令行�
 - 通过 HTTP 或浏览器发送认证请求，支持批量请求和保留浏览器会话。
 - 观察页面自身产生的 XHR / Fetch，通过刷新、滚动触发页面行为。
 - 将受管理标签页的流量录制为 HAR，辅助理解和配置获授权站点。
+- 将任意 HAR 离线转换为 OpenAPI 3.1，支持可选的站点筛选、路径模板与接口说明规则。
 - 使用持久化浏览器配置；默认共享，也可按站点隔离。
 
 完整命令和配置说明见 [SKILL.md](SKILL.md)。本仓库不附带具体站点配置；请自行创建配置，或从本机 `~/.browserauth/sites/` 管理已有配置。`references/` 仅保留空的 `.gitkeep` 占位文件。
@@ -94,6 +95,35 @@ browserauth myapp xhr list --match '/api/' --limit 10
 browserauth myapp session stop
 ```
 
+## HAR 转 OpenAPI
+
+转换已录制的流量使用内置命令，无需为站点编写脚本，也不依赖 Python、Chrome、登录态或加密口令：
+
+```bash
+# 已配置站点：默认选择该站点最新的 BrowserAuth 录制
+browserauth myapp openapi
+
+# 任意标准 HAR：无需先添加站点
+browserauth openapi --input ./capture.har --output ./capture-api
+
+# 可选站点规则（选项放在命令后；--output 必须是新目录）
+browserauth myapp openapi --input ./capture.har \
+  --config ./rules.yaml --output ./review-api
+```
+
+默认输出至 `~/.browserauth/openapi/<site>/<HAR文件名去后缀>-openapi/`；全局命令省略 `<site>` 层。目录含总 `openapi.yaml`、按协议/域名/端口拆分的 `hosts/*/openapi.yaml`、统计清单 `manifest.json` 与说明。已有目录不会覆盖；再次转换时用新的 `--output`。文件权限为 0600，新增目录为 0700。
+
+无配置即可转换。站点命令会自动读取可选的 `~/.browserauth/openapi-rules/<site>.yaml`（随 `BROWSERAUTH_DATA_DIR` 变化），`--config` 可指定替代文件；全局命令只读取显式指定的规则。完整示例见 [examples/openapi-rules.yaml](examples/openapi-rules.yaml)。支持：
+
+- `include_hosts` / `exclude_hosts`：精确主机名或 `*.example.com`，不含协议/端口；通配符不匹配根域。
+- `include_paths` / `exclude_paths`：匹配原始 URL 转义路径的正则表达式。默认排除 OPTIONS、页面及常见静态资源；`include_static: true` 可保留静态资源。JSON 地址可能是业务 API，静态 JSON 用规则筛除。
+- `path_templates`：按可选 host 和 pattern 正则匹配，将整个路径替换成固定 template；首个命中生效。未配置时自动将纯数字、UUID、长十六进制、邮件地址或已知凭据路径段归纳为 `{id1}` 等参数。其他动态路径可显式配置。
+- `operations`：按归纳后的 path、可选 host/method 补充 summary、description、tags。规则中的文字按原样输出，不应放入凭据。
+
+转换器合并请求/响应样本、不同状态码与内容类型，处理 JSON、表单、multipart 字段、Base64 JSON、重复参数和截断响应；深度超过 10 层或无法解析的结构保留为未知。跨来源同名 method/path 在总文件中合并来源与 schema，独立文件保留各来源契约。协议和端口不会丢失。
+
+不会导出原始参数值、响应示例或认证头；异常结构化 query 字段名和动态对象键会省略，数字等路径段会模板化。其他自定义路径标识符、应用定义的字段名仍需检查后再分享。HAR 样本不能证明字段必填性、登录要求、业务成功或签名规则，因此仅路径参数标为必填；生成文件是供审阅的契约初稿。命令不会重放请求，也不会自动补全登录配置。
+
 ## 数据与凭据
 
 默认数据目录为 `~/.browserauth/`，可通过 `BROWSERAUTH_DATA_DIR` 覆盖。
@@ -105,6 +135,8 @@ browserauth myapp session stop
 | `profile/` | 默认共享的持久化浏览器配置 |
 | `profiles/<id>/` | 使用 `--isolated-profile` 时的站点浏览器配置 |
 | `recordings/<id>-<时间戳>.har` | 网络流量录制，可能含明文凭据与业务数据 |
+| `openapi/` | 从 HAR 生成的 OpenAPI 规范与统计 |
+| `openapi-rules/<id>.yaml` | 可选的站点转换规则 |
 | `run/` | 保留会话的运行数据和日志 |
 
 常用环境变量：

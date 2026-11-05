@@ -27,6 +27,8 @@ Site YAML controls how BrowserAuth captures, verifies and reuses encrypted brows
 | `browserauth <site> page reload\|scroll` | Trigger page behavior without replaying signed requests |
 | `browserauth session status\|stop` | Inspect or close retained browser sessions |
 | `browserauth <site> record [url]` | Record tab traffic to HAR (stop via injected ⏹ button) |
+| `browserauth <site> openapi [--input FILE] [--output NEW_DIR] [--config RULES]` | Convert the latest site recording (or a specified HAR) to OpenAPI 3.1 |
+| `browserauth openapi --input FILE [--output NEW_DIR] [--config RULES]` | Convert any HAR offline; no configured site required |
 | `browserauth <site> cookie` | Print cookie for shell/`oapi --cookie` (do not log) |
 
 ## Setup (once)
@@ -55,6 +57,8 @@ All data under **`~/.browserauth/`** (override with `BROWSERAUTH_DATA_DIR`):
 | `profile/` | **Shared** Chrome profile (default) |
 | `profiles/<site>` | Per-site profile (when isolated) |
 | `recordings/<site>-<ts>.har` | Recorded traffic (0600, contains Cookie headers — do not commit/share) |
+| `openapi/` | Inferred OpenAPI documents and manifests |
+| `openapi-rules/<site>.yaml` | Optional site conversion rules |
 
 **Isolated profile** (optional — separate login state per site):
 
@@ -84,6 +88,45 @@ headers / JSON paths when writing a new site YAML. Notes:
   rewritten to stay in-tab.
 - Bodies >1MB are truncated (`_bodyTruncated`); binary types keep metadata only.
 - Redirect chains become one HAR entry per hop.
+
+### Convert HAR to OpenAPI
+
+Use the built-in converter instead of creating per-site scripts:
+
+```bash
+browserauth myapp openapi                          # latest recording for this site
+browserauth openapi --input ./capture.har --output ./capture-api
+browserauth myapp openapi --config ./rules.yaml --output ./review-api
+```
+
+This is offline: no HTTP replay, browser, cookie or encryption key is needed.
+Output includes aggregate `openapi.yaml`, per-origin `hosts/*/openapi.yaml`,
+`manifest.json` and `README.md`. Defaults to
+`~/.browserauth/openapi/<site>/<HAR-stem>-openapi/` (without the site layer for
+the global command). An existing output directory is never overwritten.
+
+Site commands auto-load optional `~/.browserauth/openapi-rules/<site>.yaml`;
+`--config` overrides it. Global commands only use explicitly supplied rules.
+See [examples/openapi-rules.yaml](examples/openapi-rules.yaml) for the full format:
+`include_hosts`/`exclude_hosts` (exact names or `*.domain`, without scheme/port),
+`include_paths`/`exclude_paths` (RE2 expressions on original escaped paths),
+`include_static`, `path_templates` (host, pattern, literal template; first match),
+and `operations` (normalized path, optional host/method, summary/description/tags).
+Do not embed raw sample values in rules. Unknown options are rejected.
+
+By default OPTIONS, documents and common static resources are excluded. JSON
+URLs can be APIs; use filters for static JSON. Numeric/UUID/long-hex path segments
+are templated automatically; use explicit templates for other dynamic paths.
+Schemas merge observed JSON, form/multipart, repeated parameters, status codes
+and content types; base64 JSON is decoded. Unknown/truncated/binary structures
+remain unconstrained. Matching method/path across origins is merged in the
+aggregate; per-origin files preserve separate contracts, including scheme/port.
+
+No raw values/examples/auth headers are exported. Structured query keys and
+dynamic object keys are omitted. Review other private path segments and
+application-defined field names before sharing. Only path parameters are marked
+required; HAR cannot establish API permissions, required fields, business success
+or signing rules. Login validation still needs site-specific analysis/configuration.
 
 ## Site configs
 

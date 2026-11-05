@@ -43,6 +43,8 @@ func RunSite(args []string) int {
 	}
 
 	switch sub {
+	case "openapi":
+		return OpenAPI(cfg.ID, rest)
 	case "login":
 		return siteLogin(cfg, rest)
 	case "browser":

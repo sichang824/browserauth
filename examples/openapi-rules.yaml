@@ -1,0 +1,22 @@
+# Optional rules for any site. No rules are needed for basic conversion.
+title: Example web APIs
+# Exact hostnames or *.example.com (matches subdomains, not the apex).
+# Host filters use hostname only, without scheme or port.
+include_hosts: [api.example.com, "*.services.example.com"]
+exclude_hosts: [metrics.services.example.com]
+# RE2 regular expressions applied to the original URL-escaped path.
+exclude_paths: ['^/static/', '^/health$']
+# include_static: true  # include HTML/images/scripts if explicitly needed
+path_templates:
+  # First match wins. The template is literal, not a regex replacement.
+  - host: api.example.com
+    pattern: '^/users/[^/]+/settings$'
+    template: /users/{username}/settings
+operations:
+  # Match the normalized/template path, not an observed ID.
+  - host: api.example.com
+    method: GET
+    path: /users/{username}/settings
+    summary: Read user settings
+    tags: [Users]
+    description: Read the current settings. Authentication requirements need review.
